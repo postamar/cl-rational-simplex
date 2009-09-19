@@ -18,6 +18,10 @@
 (defmacro make-vector (&optional (type t))
   `(make-array 0 :adjustable t :fill-pointer t :element-type (quote ,type)))
 
+(defmacro make-nvector (n ielt &optional (type t))
+  `(make-array ,n :initial-element ,ielt 
+	       :adjustable t :fill-pointer t :element-type (quote ,type)))
+
 (defun find-index (vector value)
   (declare ((simple-array fixnum *) vector)
 	   (fixnum value))

@@ -1,336 +1,271 @@
-;;;;; Preassigned pivot procedure
+;;;;; The Preassigned Pivot Procedure
 
 
+;;;; Auxilliary functions
 
-(defun pip-sort-ref-buffer (ssqm)
-  (let ((ref-buffer (sparse-square-matrix-ref-buffer ssqm))
-	(row-count (sparse-square-matrix-row-count ssqm)))
-    (setf (sparse-square-matrix-ref-buffer ssqm)
-	  (sort ref-buffer #'(lambda (r1 r2)
-			       (< (aref row-count r1) (aref row-count r2)))))))
-
-
-
-;;;; Initializes pip data structures and isolates pivotable columns
-(defun pip-init (ssqm)
-  (let ((col-count (sparse-square-matrix-col-count ssqm))
-	(row-count (sparse-square-matrix-row-count ssqm))
-	(row-avail (sparse-square-matrix-row-avail ssqm))
-	(col-avail (sparse-square-matrix-col-avail ssqm))
-	(ref-perm-col (sparse-square-matrix-ref-perm-col ssqm))
-	(ref-perm-row (sparse-square-matrix-ref-perm-row ssqm))
-	(ref-buffer (sparse-square-matrix-ref-buffer ssqm))
-	(col-row-refs (sparse-square-matrix-col-row-ref ssqm))
-	(row-col-refs (sparse-square-matrix-row-col-ref ssqm))
-	(m (sparse-square-matrix-size ssqm))
-	(mu (- (sparse-square-matrix-size ssqm) 1)))
-    ;; initialize data structures
-    (dotimes (k m)
-      (setf (aref row-avail k) t
-	    (aref col-avail k) t
-	    (aref ref-buffer k) k
-	    (aref row-count k) (length (aref row-col-refs k))
-	    (aref col-count k) (length (aref col-row-refs k)))) 
-    ;; scan column counts
-    (loop 
-       (let ((col-index (dotimes (k m -1)
-			  (when (and (aref col-avail k)
-				     (= 1 (aref col-count k)))
-			    (return k)))))
-	 (when (= -1 col-index)
-	   (return mu))
-	 (switch-columns-in-matrix ssqm mu (aref ref-perm-col col-index))
-	 (setf (aref col-count col-index) most-positive-fixnum
-	       (aref col-avail col-index) nil)
-	 (let* ((col-row-ref (aref col-row-refs col-index))
-		(row-index (dotimes (k (length col-row-ref) -1)
-			     (when (aref row-avail (aref col-row-ref k))
-			       (return (aref col-row-ref k)))))
-		(row-col-ref (aref row-col-refs row-index)))
-	   (switch-rows-in-matrix ssqm mu (aref ref-perm-row row-index))
-	   (setf (aref row-count row-index) most-positive-fixnum
-		 (aref row-avail row-index) nil)
-	   (dotimes (k (length row-col-ref))
-	     (let ((col-ref (aref row-col-ref k)))
-	       (when (aref col-avail col-ref)
-		 (when (zerop (decf (aref col-count col-ref)))
-		   (setf (sparse-square-matrix-is-singular ssqm) 'redundant-column
-			 (sparse-square-matrix-singular-ref ssqm) col-ref)
-		   (return -1)))))))
-       (decf mu)
-       (when (<= mu 0)
-	 (return mu)))))
+(defun pip-sort-refs (b)
+  (let ((refs (basis-refs b)))
+    (setf (basis-refs b)
+	  (sort refs
+		#'(lambda (r1 r2)
+		    (or (<= (basis-size b) r2)
+			(and (< r1 (basis-size b))
+			     (< (aref (basis-row-counts b) r1) 
+				(aref (basis-row-counts b) r2)))))))))
 
 
+;;;;; Initialization
 
-;;;;
-(defun pip-pivot-row (ssqm nu pivot-row-ref pivot-col-ref )
-  (let ((row-count (sparse-square-matrix-row-count ssqm))
-	(col-count (sparse-square-matrix-col-count ssqm))
-	(col-avail (sparse-square-matrix-col-avail ssqm))
-	(row-avail (sparse-square-matrix-row-avail ssqm))
-	(ref-perm-col (sparse-square-matrix-ref-perm-col ssqm))
-	(ref-perm-row (sparse-square-matrix-ref-perm-row ssqm))
-	(col-row-ref (aref (sparse-square-matrix-col-row-ref ssqm) pivot-col-ref)))
-    (switch-rows-in-matrix ssqm nu (aref ref-perm-row pivot-row-ref))
-    (setf (aref row-count pivot-row-ref) most-positive-fixnum
-	  (aref row-avail pivot-row-ref) nil)
-    (switch-columns-in-matrix ssqm nu (aref ref-perm-col pivot-col-ref))
-    (setf (aref col-count pivot-col-ref) most-positive-fixnum
-	  (aref col-avail pivot-col-ref) nil)
-    (dotimes (k (length col-row-ref) (+ 1 nu))
-      (let ((row-ref (aref col-row-ref k)))
-	(when (aref row-avail row-ref)
-	  (when (zerop (decf (aref row-count row-ref)))
-	    (setf (sparse-square-matrix-is-singular ssqm) 'redundant-row
-		  (sparse-square-matrix-singular-ref ssqm) row-ref)
-	    (return -1)))))))
-    
+(defun pip-init (b)
+  (dotimes (k (basis-size b))
+    (when (zerop (aref (basis-row-counts b) k))
+      (setf (basis-is-singular b)  'redundant-row
+	    (basis-singular-ref b) k)
+      (return))
+    (when (zerop (aref (basis-col-counts b) k))
+      (setf (basis-is-singular b)  'redundant-column
+	    (basis-singular-ref b) k)
+      (return)))
+  ;; scan column counts
+  (loop 
+     (when (basis-is-singular b)
+       (return))
+     (when (zerop (decf (basis-pip-last b)))
+       (return t))
+     (let ((j -1))
+       ;; find column with count of 1
+       (dotimes (k (basis-size b))
+	 (when (and (aref (basis-col-avails b) k)
+		    (= 1 (aref (basis-col-counts b) k)))
+	   (setf j k)
+	   (return)))
+       (when (= -1 j)
+	 (return t))
+       ;; permutate column
+       (basis-permutate-columns b j (aref (basis-pj->j b) (basis-pip-last b)))
+       (setf (aref (basis-col-counts b) j) most-positive-fixnum
+	     (aref (basis-col-avails b) j) nil)
+       ;; find pivot row
+       (let ((i -1)
+	     (col-is (lu-eta-matrix-is (aref (basis-l-columns b) j))))
+	 (dotimes (k (length col-is))
+	   (when (aref (basis-row-avails b) (aref col-is k))
+	     (setf i (aref col-is k))
+	     (return)))
+	 ;; permutate row
+	 (basis-permutate-rows b i (aref (basis-pi->i b) (basis-pip-last b)))
+	 (setf (aref (basis-row-counts b) i) most-positive-fixnum
+	       (aref (basis-row-avails b) i) nil)
+	 ;; decrease column counts
+	 (let ((row-js (aref (basis-row-js b) i)))
+	   (dotimes (k (length row-js))
+	     (let ((j (aref row-js k)))
+	       (when (aref (basis-col-avails b) j)
+		 (when (zerop (decf (aref (basis-col-counts b) j)))
+		   (setf (basis-is-singular b)  'redundant-column
+			 (basis-singular-ref b) j)
+		   (return))))))))))
+     
 
 
 ;;;;
-(defun pip-scan-row-counts (ssqm mu nu l)
-  (let ((row-count (sparse-square-matrix-row-count ssqm))
-	(row-avail (sparse-square-matrix-row-avail ssqm))
-	(col-avail (sparse-square-matrix-col-avail ssqm))
-	(row-col-refs (sparse-square-matrix-row-col-ref ssqm))
-	(m (sparse-square-matrix-size ssqm)))
-    (loop
-       (let* ((row-ref (dotimes (k m -1)
-			 (when (and (aref row-avail k) 
-				    (= 1 (aref row-count k)))
-			   (return k)))))
-	 (when (= -1 row-ref)
-	   (return nu))
-	 (let* ((row-col-ref (aref row-col-refs row-ref))
-		(col-ref (dotimes (k (length row-col-ref) -1)
-			   (when (aref col-avail (aref row-col-ref k))
-			     (return (aref row-col-ref k))))))
-	   (when (= -1 (pip-pivot-row ssqm nu row-ref col-ref))
-	     (return -1))))
-       (incf nu)
-       (when (< mu nu)
-	 (return nu))
-       (unless (zerop l)
-	 (return nu)))))
+(defun pip-scan-row-counts (b)
+  (loop 
+     (when (basis-is-singular b)
+       (return))
+     (when (< (basis-pip-last b) (basis-pip-first b))
+       (return t))
+     (let ((i -1))
+       ;; find row with count of 1
+       (dotimes (k (basis-size b))
+	 (when (and (aref (basis-row-avails b) k)
+		    (= 1 (aref (basis-row-counts b) k)))
+	   (setf i k)
+	   (return)))
+       (when (= -1 i)
+	 (return t))
+       ;; permutate row
+       (basis-permutate-rows b i (aref (basis-pi->i b) (basis-pip-first b)))
+       (setf (aref (basis-row-counts b) i) most-positive-fixnum
+	     (aref (basis-row-avails b) i) nil)
+       ;; find pivot column
+       (let ((j -1)
+	     (row-js (aref (basis-row-js b) i)))
+	 (dotimes (k (length row-js))
+	   (when (aref (basis-col-avails b) (aref row-js k))
+	     (setf j (aref row-js k))
+	     (return)))
+	 ;; permutate column 
+	 (basis-permutate-columns b j (aref (basis-pj->j b) (basis-pip-first b)))
+	 (setf (aref (basis-col-counts b) j) most-positive-fixnum
+	       (aref (basis-col-avails b) j) nil)
+	 ;; decrease row counts
+	 (let ((col-is (lu-eta-matrix-is (aref (basis-l-columns b) j))))
+	   (dotimes (k (length col-is))
+	     (let ((i (aref col-is k)))
+	       (when (aref (basis-row-avails b) i)
+		 (when (zerop (decf (aref (basis-row-counts b) i)))
+		   (setf (basis-is-singular b)  'redundant-row
+			 (basis-singular-ref b) i)
+		   (return))))))))
+     (incf (basis-pip-first b))
+     (unless (zerop (length (basis-pip-spikes b)))
+       (return t))))
 
 
 
-;;;; tally function, t_k(n)
-(defun pip-tally (ssqm k col-ref)
-  (let ((row-count (sparse-square-matrix-row-count ssqm))
-	(row-avail (sparse-square-matrix-row-avail ssqm))
-	(col-row-ref (aref (sparse-square-matrix-col-row-ref ssqm) col-ref))
-	(val 0))
-    (dotimes (index (length col-row-ref) val)
-      (let ((row-ref (aref col-row-ref index)))
-	(when (and (aref row-avail row-ref)
-		   (<= (aref row-count row-ref) k))
+;;;; Tally function: t_k(j)
+(defun pip-tally (b k j)
+  (let ((row-is (lu-eta-matrix-is (aref (basis-l-columns b) j)))
+	(val    0))
+    (dotimes (index (length row-is) val)
+      (let ((i (aref row-is index)))
+	(when (and (aref (basis-row-avails b) i)
+		   (<= (aref (basis-row-counts b) i) k))
 	  (incf val))))))
 
 
 
-;;;;
-(defun pip-find-spike (ssqm l)
-  (let ((ref-buffer (sparse-square-matrix-ref-buffer ssqm))
-	(col-avail (sparse-square-matrix-col-avail ssqm))
-	(row-avail (sparse-square-matrix-row-avail ssqm))
-	(flag-buffer (sparse-square-matrix-flag-buffer ssqm))
-	(row-count (sparse-square-matrix-row-count ssqm))
-	(col-count (sparse-square-matrix-col-count ssqm))
-	(spikes (sparse-square-matrix-spikes ssqm))
-	(m (sparse-square-matrix-size ssqm))
-	(spike-col-ref -1)
-	(k most-positive-fixnum))
-    (setf k (aref row-count (aref ref-buffer 0)))
-    (dotimes (col-ref m)
-      (setf (aref flag-buffer col-ref) (aref col-avail col-ref)))
-    ;; steps 6 and 7
-    (loop
-       (let ((max-tally-val 0)
-	     (max-tally-max-col-count 0)
-	     (max-tally-col -1))
-	 (dotimes (col-ref m)
-	   (when (aref flag-buffer col-ref)
-	     (let ((tally (pip-tally ssqm k col-ref)))
-	       (when (or (< max-tally-val tally)
-			 (and (= tally max-tally-val)
-			      (< max-tally-max-col-count (aref col-count col-ref))))
-		 (setf max-tally-val tally
-		       max-tally-max-col-count (aref col-count col-ref)
-		       max-tally-col col-ref)))))
-	 (when (< 1 max-tally-val)
-	   (setf spike-col-ref max-tally-col)
-	   (return))
-	 (assert (= 1 max-tally-val))
-	 (dotimes (col-ref m)
-	   (when (aref col-avail col-ref)
-	     (setf (aref flag-buffer col-ref) (= 1 (pip-tally ssqm k col-ref)))))
-	 (dotimes (ref m)
-	   (when (< k (aref row-count (aref ref-buffer ref)))
-	     (setf k (aref row-count (aref ref-buffer ref)))
-	     (return)))))
+(defun pip-find-spike-j (b k)
+  (dotimes (j (basis-size b))
+    (setf (aref (basis-flags b) j) (aref (basis-col-avails b) j)))
+  (loop
+     (let ((max-tally-val 0)
+	   (max-col-count 0)
+	   (max-tally-j  -1))
+       (dotimes (j (basis-size b))
+	 (when (aref (basis-flags b) j)
+	   (let ((tally     (pip-tally b k j))
+		 (col-count (aref (basis-col-counts b) j)))
+	     (when (or (< max-tally-val tally)
+		       (and (= tally max-tally-val)
+			    (< max-col-count col-count)))
+	       (setf max-tally-val tally
+		     max-col-count col-count
+		     max-tally-j   j)))))
+       (when (< 1 max-tally-val)
+	 (return max-tally-j))
+       (assert (= 1 max-tally-val))
+       (dotimes (j (basis-size b))
+	 (when (aref (basis-col-avails b) j)
+	   (setf (aref (basis-flags b) j) (= 1 (pip-tally b k j)))))
+       (dotimes (index (basis-size b))
+	 (let ((row-count (aref (basis-row-counts b) (aref (basis-refs b) index))))
+	   (when (< k row-count)
+	     (setf k row-count)
+	     (return)))))))
+
+
+
+;;;; Selects a spike
+(defun pip-find-spike (b)
+  (let* ((k (aref (basis-row-counts b) (aref (basis-refs b) 0)))
+	 (spike-j (pip-find-spike-j b k)))
     ;; step 8
-    (assert (/= -1 spike-col-ref))
-    (setf (aref spikes l) spike-col-ref
-	  (aref col-avail spike-col-ref) nil
-	  (aref col-count spike-col-ref) most-positive-fixnum)
-    (let ((col-row-ref (aref (sparse-square-matrix-col-row-ref ssqm) spike-col-ref)))
-      (dotimes (ref (length col-row-ref) (progn (pip-sort-ref-buffer ssqm) t))
-	(let ((row-ref (aref col-row-ref ref)))
-	  (when (aref row-avail row-ref)
-	    (when (zerop (decf (aref row-count row-ref)))
-	      (setf (sparse-square-matrix-is-singular ssqm) 'redundant-row
-		    (sparse-square-matrix-singular-ref ssqm) row-ref)
+    (assert (/= -1 spike-j))
+    (setf (aref (basis-spikes b) spike-j) (basis-pip-first b))
+    (vector-push-extend spike-j (basis-pip-spikes b))
+    (setf (aref (basis-col-avails b) spike-j) nil
+	  (aref (basis-col-counts b) spike-j) most-positive-fixnum)
+    (let ((col-is (lu-eta-matrix-is (aref (basis-l-columns b) spike-j))))
+      (dotimes (index (length col-is) (progn (pip-sort-refs b) t))
+	(let ((i (aref col-is index)))
+	  (when (aref (basis-row-avails b) i)
+	    (when (zerop (decf (aref (basis-row-counts b) i)))
+	      (setf (basis-is-singular b) 'redundant-row
+		    (basis-singular-ref b) i)
 	      (return nil))))))))
-	    
-		   
-		
+
+
+
 ;;;; Pivots the spike
-;;;; returns new nu
-(defun pip-spike-pivot (ssqm mu nu l)
-  (let ((ref-buffer (sparse-square-matrix-ref-buffer ssqm))
-	(col-avail (sparse-square-matrix-col-avail ssqm))
-	(row-avail (sparse-square-matrix-row-avail ssqm))
-	(flag-buffer (sparse-square-matrix-flag-buffer ssqm))
-	(row-count (sparse-square-matrix-row-count ssqm))
-	(col-count (sparse-square-matrix-col-count ssqm))
-	(ref-perm-col (sparse-square-matrix-ref-perm-col ssqm))
-	(ref-perm-row (sparse-square-matrix-ref-perm-row ssqm))
-	(col-row-refs (sparse-square-matrix-col-row-ref ssqm))
-	(spikes (sparse-square-matrix-spikes ssqm))
-	(m (sparse-square-matrix-size ssqm))
-	(pivot-col-ref -1)
-	(k 1))
-    (dotimes (col-ref m)
-      (setf (aref flag-buffer col-ref) (aref col-avail col-ref)))
-    ;; steps 10 and 11
+(defun pip-spike-pivot (b)
+  (dotimes (j (basis-size b))
+    (setf (aref (basis-flags b) j) (aref (basis-col-avails b) j)))
+  (let* ((pivot-j (pip-find-spike-j b 1))
+	 (q       (pip-tally b 1 pivot-j))
+	 (pivot-i -1)
+	 (col-is  (lu-eta-matrix-is (aref (basis-l-columns b) pivot-j))))
+    ;; steps 12 and 13
+    (dotimes (index (length col-is))
+      (let ((i (aref col-is index)))
+	(when (and (aref (basis-row-avails b) i)
+		   (= 1 (aref (basis-row-counts b) i)))
+	  (setf pivot-i i))))
+    (assert (/= -1 pivot-i))
+    (basis-permutate-rows b pivot-i (aref (basis-pi->i b) (basis-pip-first b)))
+    (setf (aref (basis-row-counts b) pivot-i) most-positive-fixnum
+	  (aref (basis-row-avails b) pivot-i) nil)
+    (basis-permutate-columns b pivot-j (aref (basis-pj->j b) (basis-pip-first b)))
+    (setf (aref (basis-col-counts b) pivot-j) most-positive-fixnum
+	  (aref (basis-col-avails b) pivot-j) nil)
+    (dotimes (index (length col-is))
+      (let ((i (aref col-is index)))
+	(when (aref (basis-row-avails b) i)
+	  (decf (aref (basis-row-counts b) i)))))
+    (pip-sort-refs b)
     (loop
-       (let ((max-tally-val 0)
-	     (max-tally-max-col-count 0)
-	     (max-tally-col -1))
-	 (dotimes (col-ref m)
-	   (when (aref flag-buffer col-ref)
-	     (let ((tally (pip-tally ssqm k col-ref)))
-	       (when (or (< max-tally-val tally)
-			 (and (= tally max-tally-val)
-			      (< max-tally-max-col-count (aref col-count col-ref))))
-		 (setf max-tally-val tally
-		       max-tally-max-col-count (aref col-count col-ref)
-		       max-tally-col col-ref)))))
-	 (when (< 1 max-tally-val)
-	   (setf pivot-col-ref max-tally-col)
-	   (return))
-	 (assert (= 1 max-tally-val))
-	 (dotimes (col-ref m)
-	   (when (aref col-avail col-ref)
-	     (setf (aref flag-buffer col-ref) (= 1 (pip-tally ssqm k col-ref)))))
-	 (dotimes (ref m)
-	   (when (< k (aref row-count (aref ref-buffer ref)))
-	     (setf k (aref row-count (aref ref-buffer ref)))
-	     (return)))))
-    (let ((q (pip-tally ssqm 1 pivot-col-ref)))
-      ;; steps 12 and 13
-      (let ((pivot-row-ref -1)
-	    (col-row-ref (aref col-row-refs pivot-col-ref)))
-	(dotimes (ref (length col-row-ref))
-	  (let ((row-ref (aref col-row-ref ref)))
-	    (when (and (aref row-avail row-ref)
-		       (= 1 (aref row-count row-ref)))
-	      (setf pivot-row-ref row-ref))))
-	(switch-rows-in-matrix ssqm nu (aref ref-perm-row pivot-row-ref))
-	(setf (aref row-count pivot-row-ref) most-positive-fixnum
-	      (aref row-avail pivot-row-ref) nil)
-	(switch-columns-in-matrix ssqm nu (aref ref-perm-col pivot-col-ref))
-	(setf (aref col-count pivot-col-ref) most-positive-fixnum
-	      (aref col-avail pivot-col-ref) nil)
-	(dotimes (ref (length col-row-ref))
-	  (let ((row-ref (aref col-row-ref ref)))
-	    (when (aref row-avail row-ref)
-	      (decf (aref row-count row-ref)))))
-	(pip-sort-ref-buffer ssqm)
-	(loop 
-	   (incf nu)
-	   (when (< mu nu)
-	     (pip-sort-ref-buffer ssqm)
-	     (return (values nu l)))
-	   (decf q)
-	   (when (zerop q)
-	     (pip-sort-ref-buffer ssqm)
-	     (return (values nu l)))
-	   (decf l)
-	   (switch-columns-in-matrix ssqm nu (aref ref-perm-col (aref spikes l)))
-	   (let ((spike-row-ref -1))
-	     (dotimes (ref m)
-	       (let ((row-ref (aref ref-buffer ref)))
-		 (when (zerop (aref row-count row-ref))
-		   (setf spike-row-ref row-ref)
-		   (return))))
-	     (assert (/= -1 spike-row-ref))
-	     (switch-rows-in-matrix ssqm nu (aref ref-perm-row spike-row-ref))))))))
-	     
-
+       (incf (basis-pip-first b))
+       (when (< (basis-pip-last b) (basis-pip-first b))
+	 (pip-sort-refs b)
+	 (return))
+       (decf q)
+       (when (zerop q)
+	 (pip-sort-refs b)
+	 (return))
+       (let ((spike-j (vector-pop (basis-pip-spikes b)))
+	     (spike-i -1))
+	 (basis-permutate-columns b spike-j (aref (basis-pj->j b) (basis-pip-first b)))
+	 (dotimes (index (basis-size b))
+	   (let ((i (aref (basis-refs b) index)))
+	     (when (zerop (aref (basis-row-counts b) i))
+	       (setf spike-i i)
+	       (return))))
+	 (assert (/= -1 spike-i))
+	 (setf (aref (basis-row-counts b) spike-i) most-positive-fixnum
+	       (aref (basis-row-avails b) spike-i) nil)
+	 (basis-permutate-rows b spike-i (aref (basis-pi->i b) (basis-pip-first b)))))))
 	       
-		      
+
+
 ;;;;
-(defun preassigned-pivot (ssqm)
-  ;; step 1
-  (let ((row-count (sparse-square-matrix-row-count ssqm))
-	(ref-buffer (sparse-square-matrix-ref-buffer ssqm))
-	(m (sparse-square-matrix-size ssqm))
-	(mu (pip-init ssqm))
-	(nu 0)
-	(l 0))
-    (pip-sort-ref-buffer ssqm)
-    (cond ((= -1 mu)) ;; singularity, do nothing
-	  ((zerop mu) ;; find the first spike
-	   (pip-find-spike ssqm l)
-	   (incf l))
-	  (t ;; scan row counts for the first time
-	   (let ((new-nu (pip-scan-row-counts ssqm mu nu l)))
-	     (unless (= nu new-nu)
-	       (pip-sort-ref-buffer ssqm))
-	     (setf nu new-nu))))
-    ;; deal with bumps
-    (unless (or (sparse-square-matrix-is-singular ssqm) 
-		(< mu nu))
+(defun preassigned-pivot (b)
+  ;; start by scanning row and column counts for the first time
+  (when (pip-init b)
+    (if (zerop (basis-pip-last b))
+	(pip-find-spike b)
+	(when (pip-scan-row-counts b)
+	  (pip-sort-refs b)))
+    ;; deal with bumps or terminate
+    (unless (or (basis-is-singular b)
+		(< (basis-pip-last b) (basis-pip-first b)))
       (loop
-;	 (print-sparse-square-matrix ssqm)
 	 ;; scan row counts for path-decisions
-	 (cond ((< 1 (aref row-count (aref ref-buffer 0)))
-		;; another spike
-;		(format t "finding spike~%")
-		(unless (pip-find-spike ssqm l)
-		  (return))
-;		(format t "found column ~A~%" (aref (sparse-square-matrix-ref-perm-col ssqm) (aref (sparse-square-matrix-spikes ssqm) l)))
-		(incf l))
-	       ((or (zerop l)
-		    (and (= 1 (aref row-count (aref ref-buffer 0)))
-			 (< 1 (aref row-count (aref ref-buffer 1)) (+ m 1))))
-		;; scan row count
-;		(format t "scannning row count~%")
-		(let ((new-nu (pip-scan-row-counts ssqm mu nu l)))
-		  (unless (= nu new-nu)
-		    (pip-sort-ref-buffer ssqm))
-		  (setf nu new-nu))
-		(when (< mu nu)
-		  (return)))
-	       ((= 1 (aref row-count (aref ref-buffer 0)))
-		;; spike pivot
-;		(format t "spike pivot~%")
-		(multiple-value-bind (new-nu new-l) (pip-spike-pivot ssqm mu nu l)
-		  (setf nu new-nu l new-l))
-		(when (< mu nu)
-		  (return)))
-	       (t
-		(error "error in preassigned pivot procedure~%")))))
-    ;; return t when done with pivoting
-    ;; return nil if singular
- ;   (print-sparse-square-matrix ssqm)
-    (< mu nu)))
+	 (let ((smallest-row-count (aref (basis-row-counts b) 
+					 (aref (basis-refs b) 0)))
+	       (next-smallest-row-count (aref (basis-row-counts b)
+					      (aref (basis-refs b) 1))))
+	   (cond ((< 1 smallest-row-count)
+		  ;; another spike
+		  (unless (pip-find-spike b)
+		    (return)))
+		 ((or (zerop (length (basis-pip-spikes b)))
+		      (and (= 1 smallest-row-count)
+			   (< 1 next-smallest-row-count (+ (basis-size b) 1))))
+		  ;; scan row count
+		  (when (pip-scan-row-counts b)
+		    (pip-sort-refs b))
+		  (when (< (basis-pip-last b) (basis-pip-first b))
+		    (return)))
+		 ((= 1 smallest-row-count)
+		  ;; spike pivot
+		  (pip-spike-pivot b)
+		  (when (< (basis-pip-last b) (basis-pip-first b))
+		    (return)))
+		 (t
+		  (error "error in preassigned pivot procedure~%")))))
+      ;; return t when done with pivoting
+      ;; return nil if singular
+      (< (basis-pip-last b) (basis-pip-first b)))))
 
-
-   
-
-		 
-
+		    
