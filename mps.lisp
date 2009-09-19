@@ -127,11 +127,13 @@
 	(bounds)
 	(n-named 1)
 	(n-slack 0)
+	(obj-sense -1)
+	(obj-name)
 	(m 0))
 
     (with-open-file (mps-stream (make-pathname :directory "/" 
-				      :name mps-full-file-name) 
-		       :direction :input)
+					       :name mps-full-file-name) 
+				:direction :input)
 
       (read-mps-block mps-stream header ("ROWS"))
       (read-mps-block mps-stream rows ("COLUMNS"))
@@ -149,20 +151,18 @@
 	  header (nreverse header))
     (setf (mps-lp-name data) (cadar header))
     (pop header)
-    (let ((obj-sense -1)
-	  (obj-name))
-      (loop
-	 (unless header
-	   (return))
-	 (when (string= (caar header) "OBJNAME")
-	   (setf obj-name (caadr header)))
-	 (when (string= (caar header) "OBJSENSE")
-	   (when (or (string= (caadr header) "MAX")
-		     (string= (caadr header) "MAXIMIZE"))
-	     (setf obj-sense 1)))
-	 (pop header)
-	 (pop header))
-      (setf (mps-obj-spec data) (cons obj-name obj-sense)))
+    (loop
+       (unless header
+	 (return))
+       (when (string= (caar header) "OBJNAME")
+	 (setf obj-name (caadr header)))
+       (when (string= (caar header) "OBJSENSE")
+	 (when (or (string= (caadr header) "MAX")
+		   (string= (caadr header) "MAXIMIZE"))
+	   (setf obj-sense 1)))
+       (pop header)
+       (pop header))
+    (setf (mps-obj-spec data) (cons obj-name obj-sense))
 
     ;; parse the rows
     (dolist (row rows)
@@ -179,7 +179,8 @@
 	     (push (cons (cadr row) '=) (mps-row-spec data)))
 	    ((string= (car row) "N")
 	     (unless (car (mps-obj-spec data))
-	       (setf (mps-obj-spec data) (cons (cadr row) (cdr (mps-obj-spec data))))))
+	       (setf obj-name (cadr row)
+		     (mps-obj-spec data) (cons (cadr row) (cdr (mps-obj-spec data))))))
 	    (t
 	     (print row)
 	     (error "parse error in MPS file, row section"))))
@@ -208,17 +209,22 @@
 	  (pop rhs))
 	(cond ((= length 2)
 	       (destructuring-bind (n1 v1) rhs
-		 (push (cons n1 (rationalize (read-from-string v1))) 
-		       (mps-row-rhss data))))
+		 (if (string= n1 obj-name) 
+		     (format t "Warning: objective has upper bound ~A~%" v1)
+		     (push (cons n1 (rationalize (read-from-string v1))) 
+			   (mps-row-rhss data)))))
 	      ((= length 4)
 	       (destructuring-bind (n1 v1 n2 v2) rhs
-		 (push (cons n2 (rationalize (read-from-string v2))) 
-		       (mps-row-rhss data))
-		 (push (cons n1 (rationalize (read-from-string v1))) 
-		       (mps-row-rhss data))))
+		 (if (string= n2 obj-name) 
+		     (format t "Warning: objective has upper bound ~A~%" v2)
+		     (push (cons n2 (rationalize (read-from-string v2))) 
+			   (mps-row-rhss data)))
+		 (if (string= n1 obj-name) 
+		     (format t "Warning: objective has upper bound ~A~%" v1)
+		     (push (cons n1 (rationalize (read-from-string v1))) 
+			   (mps-row-rhss data)))))
 	      (t
 	       (error "parse error in MPS file, rhs section")))))
-
 
     ;; parse the ranges, if they exist
     (when lhss
@@ -230,17 +236,22 @@
 	    (pop lhs))
 	  (cond ((= length 2)
 		 (destructuring-bind (n1 v1) lhs
-		   (push (cons n1 (rationalize (read-from-string v1))) 
-			 (mps-row-lhss data))))
+		   (if (string= n1 obj-name) 
+		       (format t "Warning: objective has lower bound ~A~%" v1)
+		       (push (cons n1 (rationalize (read-from-string v1))) 
+			     (mps-row-lhss data)))))
 		((= length 4)
 		 (destructuring-bind (n1 v1 n2 v2) lhs
-		   (push (cons n2 (rationalize (read-from-string v2))) 
-			 (mps-row-lhss data))
-		   (push (cons n1 (rationalize (read-from-string v1))) 
-			 (mps-row-lhss data))))
+		   (if (string= n2 obj-name) 
+		       (format t "Warning: objective has lower bound ~A~%" v2)
+		       (push (cons n2 (rationalize (read-from-string v2))) 
+			     (mps-row-lhss data)))
+		   (if (string= n1 obj-name) 
+		       (format t "Warning: objective has lower bound ~A~%" v1)
+		       (push (cons n1 (rationalize (read-from-string v1))) 
+			     (mps-row-lhss data)))))
 		(t
 		 (error "parse error in MPS file, range section"))))))
-
 
     ;; parse the bounds, if they exist
     (dolist (bound bounds)
@@ -267,6 +278,7 @@
 	       (push (cons name nil) (mps-col-lbounds data)))
 	      (t
 	       (error "parse error in MPS file, bounds section")))))
+
     (values data n-named n-slack m)))
 	     
 
