@@ -42,23 +42,24 @@
 
 ;;;;
 (defun presolve-singleton-row-fix (lp row-ref only-col-ref)
-  (let ((col (aref (lp-columns lp) only-col-ref))
-	(row (aref (lp-rows lp) row-ref)))
-    (let ((b (row-b row))
-	  (a (rational-in-column col (aref (row-col-indices row) 0))))
-      (fix-column lp col (/ b a)))))
+  (let* ((col (aref (lp-columns lp) only-col-ref))
+	 (row (aref (lp-rows lp) row-ref))
+	 (slack-col (aref (lp-columns lp) (row-slack-col-ref row)))
+	 (b (column-l slack-col))
+	 (a (rational-in-column col (aref (row-col-indices row) 0))))
+    (fix-column lp col (/ b a))))
 	
   
 (defun presolve-singleton-row-bound (lp row-ref only-col-ref)
   (let* ((col (aref (lp-columns lp) only-col-ref))
 	 (row (aref (lp-rows lp) row-ref))
 	 (slack-col (aref (lp-columns lp) (row-slack-col-ref row)))
-	 (slack-col-coef (aref (column-values slack-col) 0)))
-    (let ((b (row-b row))
-	  (a (rational-in-column col (aref (row-col-indices row) 0))))
-      (if (= -1 slack-col-coef)
-	  (update-column-upper-bound lp col (/ b a))
-	  (update-column-lower-bound lp col (/ b a))))))
+	 (slack-col-coef (aref (column-values slack-col) 0))
+	 (b (column-l slack-col))
+	 (a (rational-in-column col (aref (row-col-indices row) 0))))
+    (if (= -1 slack-col-coef)
+	(update-column-upper-bound lp col (/ b a))
+	(update-column-lower-bound lp col (/ b a)))))
 
 
 		  
@@ -109,7 +110,8 @@
 	(when (lp-is-infeasible lp)
 	  (return))
 	(cond 
-	  ((and (column-has-l col) (column-has-u col)
+	  ((and (not (column-is-slack col))
+		(column-has-l col) (column-has-u col)
 		(= (column-l col) (column-u col)))
 	   (lp-remove-column lp col-ref))
 	  (t
@@ -181,9 +183,6 @@
       (print-preprocess-stats lp))
   (not (lp-is-infeasible lp)))
      
-	 
-	 
-
 
 
 

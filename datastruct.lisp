@@ -89,6 +89,7 @@
 	 (defun ,(fname "RESET-" "") (,ds)
 	   (setf (fill-pointer (,(fname "" "-KEYS") ,ds)) 0
 		 (fill-pointer (,(fname "" "-VALUES") ,ds)) 0
+		 (fill-pointer (,(fname "" "-GARBAGE") ,ds)) 0
 		 (,(fname "" "-HEADER") ,ds) -1)
 		 ,@(loop for k from 1 upto npointer
 		      collect `(setf (fill-pointer (,(slotname k) ,ds)) 0)))  
@@ -380,7 +381,7 @@
 		    (when (= -1 ,ri)
 		      (return ,i))
 		    (setf ,i ,ri))))))
-       (defmacro ,(fname "MAP-TREE-" "") (,fn ,bt &optional (,i -1))
+       (defmacro ,(fname "MAP-" "") (,fn ,bt &optional (,i -1))
 	 (if (= -1 ,i)
 	     `(defmaptree ,,namestr ,,fn ,,bt (,',(fname "" "-HEADER") ,,bt))
 	     `(defmaptree ,,namestr ,,fn ,,bt ,,i)))
@@ -442,8 +443,6 @@
 			 (unless (= -1 ,nexti)
 			   (setf (,(fname "" "-POINTER-3") ,bt ,nexti) ,newi))
 			 (values ,newi t)))))))
-       (defmacro ,(fname "MAP-" "") (,fn ,bt &rest ,morebt)
-	 `(defmap ,,namestr ,',(fname "" "-FIND-SMALLEST") ,',(fname "" "-POINTER-4") ,,fn ,,bt ,,morebt))
        (defmacro ,(fname "MAP-FORWARD-" "") (,fn ,bt &rest ,morebt)
 	 `(defmap ,,namestr ,',(fname "" "-FIND-SMALLEST") ,',(fname "" "-POINTER-4") ,,fn ,,bt ,,morebt))
        (defmacro ,(fname "MAP-BACKWARD-" "") (,fn ,bt &rest ,morebt)
@@ -473,14 +472,15 @@
 	(ri (gensym "PTR"))
 	(lli (gensym "PTR"))
 	(lri (gensym "PTR"))
+	(lrli (gensym "PTR"))
 	(rli (gensym "PTR"))
 	(rri (gensym "PTR")))
     (flet ((fname (pre app)
 	     (intern (concatenate 'string pre namestr app))))
     `(progn
        (binary-tree :name ,namestr :key-type ,key-type :val-type ,val-type :key-equal ,key-equal :key-increasing ,key-increasing)
-       (defdatastruct ,(intern namestr) ,key-type ,val-type 2)
-       (defun ,(fname "" "-FIND-KEY") (,st ,key)
+       ;(defdatastruct ,(intern namestr) ,key-type ,val-type 2)
+       (defun ,(fname "" "-SPLAY") (,st ,key)
 	 (if (= -1 (,(fname "" "-HEADER") ,st))
 	     (values -1 nil)
 	     (loop
@@ -544,6 +544,28 @@
 				  (return (values ,ip nil))))))
 			(t
 			 (return (values ,ip nil))))))))
+       (defun ,(fname "" "-REMOVE") (,st ,key)
+	 (multiple-value-bind (,ip ,there)
+	     (,(fname "" "-SPLAY") ,st ,key)
+	   (if (not ,there)
+	       (values -1 nil)
+	       (if (= -1 (,(fname "" "-POINTER-1") ,st ,ip))
+		   (let ((,ri (,(fname "" "-POINTER-2") ,st ,ip)))
+		     (setf (,(fname "" "-HEADER") ,st) ,ri)
+		     (values (,(fname "REMOVE-IN-" "") ,st ,ip) t))
+		   (loop
+		      (let* ((,li (,(fname "" "-POINTER-1") ,st ,ip))
+			     (,lri (,(fname "" "-POINTER-2") ,st ,li)))
+			(if (= -1 ,lri)
+			    (let ((,ri (,(fname "" "-POINTER-2") ,st ,ip)))
+			      (setf (,(fname "" "-HEADER") ,st) ,li
+				    (,(fname "" "-POINTER-2") ,st ,li) ,ri)
+			      (return (values (,(fname "REMOVE-IN-" "") ,st ,ip) t)))
+			    (let ((,lrli (,(fname "" "-POINTER-1") ,st ,lri)))
+			    ;; left rotation on left child of root
+			    (setf (,(fname "" "-POINTER-1") ,st ,lri) ,li
+				  (,(fname "" "-POINTER-1") ,st ,ip) ,lri
+				  (,(fname "" "-POINTER-2") ,st ,li) ,lrli)))))))))
        (defun ,(fname "" "-SET") (,st ,key ,val)
 	 (if (= -1 (,(fname "" "-HEADER") ,st))
 	     (values 
@@ -551,7 +573,7 @@
 		    (,(fname "ADD-IN-" "") ,st ,key ,val -1 -1))
 	      t)
 	     (multiple-value-bind (,ip ,there)
-		 (,(fname "" "-FIND-KEY") ,st ,key)
+		 (,(fname "" "-SPLAY") ,st ,key)
 	       (if ,there
 		   (progn
 		     (setf (,(fname "" "-VALUE") ,st ,ip) ,val)

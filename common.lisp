@@ -23,6 +23,13 @@
   `(make-array ,n :initial-element ,ielt 
 	       :adjustable t :fill-pointer t :element-type (quote ,type)))
 
+(defun linear-modify (vector old-value new-value)
+  (let ((len (length vector)))
+    (dotimes (k len)
+      (when (= old-value (aref vector k))
+	(setf (aref vector k) new-value)
+	(return t)))))
+
 (defun find-index (vector value)
   (declare ((array fixnum *) vector)
 	   (fixnum value))
@@ -111,4 +118,35 @@
     (if (zerop n)
 	-1
 	p)))
-   
+
+
+
+;;;;
+(defun in-place-sort-keys-increasing (keys values)
+  (flet ((sift-down (root end)
+	   (loop
+	      (let ((child (+ 1 (* 2 root))))
+		(when (> child end)
+		  (return))
+		(when (and (< child end)
+			   (< (aref keys child) (aref keys (+ child 1))))
+		  (incf child))
+		(when (>= (aref keys root) (aref keys child))
+		  (return))
+		(rotatef (aref keys root) (aref keys child))
+		(rotatef (aref values root) (aref values child))
+		(setf root child)))))
+    ;; max-heapify
+    (let ((count (length keys)))
+      (loop for heapify-start from (floor (- count 2) 2) downto 0
+	 do (sift-down heapify-start (- count 1)))
+      ;; sort
+      (loop for end from (- count 1) downto 1
+	 do (progn (rotatef (aref keys 0) (aref keys end))
+		   (rotatef (aref values 0) (aref values end))
+		   (sift-down 0 (- end 1)))))))
+      
+		     
+	    
+	     
+		     

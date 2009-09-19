@@ -26,9 +26,7 @@
   (name          ""  :type string)
   (ref           -1  :type fixnum)
   (is-active     nil   :type boolean)
-  (relation      '=  :type symbol)
   (slack-col-ref -1  :type fixnum)
-  (b             0   :type rational)
   (coef          1   :type rational)
   (col-refs      #() :type vector)
   (col-indices   #() :type vector))
@@ -117,37 +115,57 @@
 
 ;;;; LP Constructor
 (defun mps->lp (mps-data)
-  (let  ((n       (length (mps-col-spec mps-data)))
-	 (n-slack 0)
-	 (m       (length (mps-row-spec mps-data)))
-	 (cibyn   (make-hash-table :test 'equal))
-	 (ribyn   (make-hash-table :test 'equal))
-	 (arref   (make-vector fixnum))
-	 (acref   (make-vector fixnum))
-	 (arind   (make-vector fixnum))
-	 (acind   (make-vector fixnum))
-	 (cols    (make-array 0 
-			      :initial-element (make-column)
-			      :adjustable t 
-			      :fill-pointer t 
-			      :element-type 'column))
-	 (rows    (make-array 0
-			      :initial-element (make-row)
-			      :adjustable t
-			      :fill-pointer t
-			      :element-type 'row)))
+  (let*  ((n       (length (mps-col-spec mps-data)))
+	  (m       (length (mps-row-spec mps-data)))
+	  (cibyn   (make-hash-table :test 'equal))
+	  (ribyn   (make-hash-table :test 'equal))
+	  (arref   (make-vector fixnum))
+	  (acref   (make-vector fixnum))
+	  (arind   (make-vector fixnum))
+	  (acind   (make-vector fixnum))
+	  (cols    (make-array 0
+			       :initial-element (make-column)
+			       :adjustable t 
+			       :fill-pointer t 
+			       :element-type 'column))
+	  (rows    (make-array 0
+			       :initial-element (make-row)
+			       :adjustable t
+			       :fill-pointer t
+			       :element-type 'row)))
     ;; make column array
     (let ((j 0))
       (dolist (e (mps-col-spec mps-data))
-	(vector-push-extend j acind)
-	(vector-push-extend j acref)
 	(vector-push-extend (make-column 
 			     :name (car e)
 			     :ref j
 			     :is-active t)
 			    cols)
 	(setf (gethash (car e) cibyn) j)
-	(incf j)))
+	(vector-push-extend j acref)
+	(vector-push-extend j acind)
+	(incf j))
+      (dotimes (i m)
+	(let ((name (concatenate 'string "slack" (princ-to-string i))))
+	  (vector-push-extend 
+	   (make-column :name name
+			:ref j
+			:is-active t
+			:is-slack t
+			:has-l t
+			:has-u t
+			:row-refs (make-array 1 
+					      :initial-element i 
+					      :element-type 'fixnum)
+			:values (make-array 1
+					    :initial-element 1
+					    :element-type 'integer))
+	   cols)
+	  (setf (gethash name cibyn) j))
+	(vector-push-extend j acref)
+	(vector-push-extend j acind)
+	(incf j))
+      (assert (= j (+ n m))))
     ;; make row array
     (let ((i 0))
       (dolist (e (mps-row-spec mps-data))
@@ -156,55 +174,15 @@
 	(let ((row (make-row :name (car e) 
 			     :ref i
 			     :is-active t
-			     :relation (cdr e)
 			     :col-refs (make-vector fixnum)
 			     :col-indices (make-vector fixnum))))
-	  (unless (eq '= (cdr e))
-	    (let ((slack-col-ref (+ n n-slack)))
-	      (setf (row-slack-col-ref row) slack-col-ref)
-	      (vector-push-extend slack-col-ref (row-col-refs row))
-	      (vector-push-extend 0 (row-col-indices row))
-	      (incf n-slack)))
+	  (setf (row-slack-col-ref row) (+ n i))
+	  (vector-push-extend (+ n i) (row-col-refs row))
+	  (vector-push-extend 0 (row-col-indices row))
 	  (vector-push-extend row rows))
 	(setf (gethash (car e) ribyn) i)
-	(incf i)))
-    ;; fill rows and check for non-negativity
-    (dolist (e (mps-row-rhss mps-data))
-      (let ((row   (aref rows (gethash (car e) ribyn)))
-	    (b_i   (cdr e))
-	    (rfact 1))
-	(when (< b_i 0)
-	  (setf b_i   (- b_i)
-		rfact -1))
-	(setf (row-b row)    b_i
-	      (row-coef row) rfact)))
-    ;; add slack columns
-    (let ((j 0))
-      (dotimes (i m)
-	(let ((row_i (aref rows i)))
-	  (unless (eq '= (row-relation row_i))
-	    (let ((val (* (if (eq '<= (row-relation row_i)) 1 -1)
-			  (row-coef row_i)))
-		  (name (concatenate 'string 
-				     "slack" 
-				     (princ-to-string j))))
-	      (let ((col-ref (length cols)))
-		(vector-push-extend 
-		 (make-column :name name
-			      :ref col-ref
-			      :is-active t
-			      :is-slack t
-			      :row-refs (make-array 1 
-						    :initial-element i 
-						    :element-type 'fixnum)
-			      :values (make-array 1
-						  :initial-element val
-						  :element-type 'integer))
-		 cols)
-		(setf (gethash name cibyn) col-ref)
-		(vector-push-extend col-ref acref)
-		(vector-push-extend col-ref acind)))
-	    (incf j)))))
+	(incf i))
+      (assert (= i m)))
     ;; fill columns
     (dolist (e (mps-col-spec mps-data))
       (let* ((j (gethash (car e) cibyn))
@@ -246,6 +224,22 @@
 	    (setf (column-has-u col_j) t
 		  (column-u col_j) u_j)
 	    (setf (column-has-u col_j) nil))))
+    ;; fill slack column bounds
+    (dolist (e (mps-row-rhss mps-data))
+      (let* ((row   (aref rows (gethash (car e) ribyn)))
+	     (slack (aref cols (row-slack-col-ref row)))
+	     (val   (- (cdr e))))
+	(setf (column-l slack) val
+	      (column-u slack) val)))
+    (dolist (e (mps-row-spec mps-data))
+      (let* ((row      (aref rows (gethash (car e) ribyn)))
+	     (slack    (aref cols (row-slack-col-ref row)))
+	     (relation (cdr e)))
+	(cond ((eq relation '>=)
+	       (setf (column-has-l slack) nil))
+	      ((eq relation '<=)
+	       (setf (column-has-u slack) nil))
+	      (t (assert (eq relation '=))))))
     ;; return lp instance
     (make-lp :name            (mps-lp-name mps-data)
 	     :obj-name        (car (mps-obj-spec mps-data))

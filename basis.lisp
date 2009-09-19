@@ -1,200 +1,123 @@
-;;;; Data structures for everything regarding current basis
-
+;;;;; Basis info
 
 
 (defstruct (basis
 	     (:constructor %make-basis))
-  (size          0   :type fixnum)
-  (is-singular   nil :type symbol)
-  (singular-ref  -1  :type fixnum)
-  (ppivot-coef   0.0 :type float)
-  (refs          #() :type vector)
-  (flags         #() :type vector)
-  (spikes        #() :type vector)
-  (l-columns     #() :type vector)
-  (u-columns     #() :type vector)
-  (col-hrefs     #() :type vector)
-  (col-is        #() :type vector)
-  (col-nnz       #() :type vector)
-  (row-hrefs     #() :type vector)
-  (row-js        #() :type vector)
-  (row-cis       #() :type vector)
-  (row-nnz       #() :type vector)
-  (heap-js       #() :type vector)
-  (heap-is       #() :type vector)
-  (heap-cis      #() :type vector)
-  (href->hi      #() :type vector)
-  (hi->href      #() :type vector)
-  (i->pi         #() :type vector)
-  (pi->i         #() :type vector)
-  (j->pj         #() :type vector)
-  (pj->j         #() :type vector)
-  (lu-ppivots1   #() :type vector)
-  (lu-ppivots2   #() :type vector)
-  )
+  (matrix         nil :type basis-matrix)
+  (in-phase1      t   :type boolean)
+  (status         'undef :type t)
+  (header         #() :type vector)
+  (dse-weights    #() :type vector)
+  (reduced-costs  #() :type vector)
+  (column-flags   #() :type vector)
+  (obj-value      0   :type rational)
+  (primal-values  #() :type vector))
+    
+
+
+;;;; Sets nonbasic variables for initial basis in phase 1
+(defun phase1-initial-nonbasic-flags (lp flags)
+  (dotimes (j (length (lp-columns lp)))
+    (let ((col (aref (lp-columns lp) j)))
+      (setf (aref flags j)
+	    (cond ((not (column-is-active col))
+		   'inactive)
+		  ((column-is-slack col)
+		   'basic)
+		  ((and (column-has-l col) (column-has-u col))
+		   'boxed)
+		  (t 
+		   (if (< (* (- (lp-obj-sense lp)) (column-c col)) 0)
+		       'nonbasic-upper-bound
+		       'nonbasic-lower-bound)))))))
+
+
+;;;; Computes phase 1 objective from scratch
+(defun phase1-initial-objective-value (lp flags)
+  (let ((n (length (lp-columns lp)))
+	(z 0))
+    (dotimes (j n z)
+      (let ((col (aref (lp-columns lp) j))
+	    (flag (aref flags j)))
+	(cond ((zerop (column-c col)))
+	      ((and (eq flag 'nonbasic-upper-bound)
+		    (not (column-has-u col)))
+	       (incf z (* (- (lp-obj-sense lp)) (column-c col))))
+	      ((and (eq flag 'nonbasic-lower-bound)
+		    (not (column-has-l col)))
+	       (decf z (* (- (lp-obj-sense lp)) (column-c col)))))))))
 
 
 
-;;;; Basis constructor
-(defun make-basis (&key (m -1) (lp nil) (ppivot-coef 0.0))
-  (when lp
-    (setf m (length (lp-active-row-refs lp))))
-  (let ((b (%make-basis
-	    :size          m
-	    :ppivot-coef   ppivot-coef
-	    :refs          (make-nvector m -1 fixnum)
-	    :flags         (make-nvector m nil boolean)
-	    :spikes        (make-nvector m -1 fixnum)
-	    :l-columns     (make-nvector m (make-lu-eta-matrix) lu-eta-matrix)
-	    :u-columns     (make-vector lu-eta-matrix)
-	    :col-nnz       (make-nvector m 0 fixnum)
-	    :row-nnz       (make-nvector m 0 fixnum)
-	    :col-hrefs     (make-nvector m #() vector)
-	    :col-is        (make-nvector m #() vector)
-	    :row-hrefs     (make-nvector m #() vector)
-	    :row-js        (make-nvector m #() vector)
-	    :row-cis       (make-nvector m #() vector)
-	    :heap-js       (make-vector fixnum)
-	    :heap-is       (make-vector fixnum)
-	    :heap-cis      (make-vector fixnum)
-	    :href->hi      (make-vector fixnum)
-	    :hi->href      (make-vector fixnum)
-	    :j->pj         (make-nvector m -1 fixnum)
-	    :i->pi         (make-nvector m -1 fixnum)
-	    :pj->j         (make-nvector m -1 fixnum)
-	    :pi->i         (make-nvector m -1 fixnum)
-	    :lu-ppivots1   (make-nvector m -1 fixnum)
-	    :lu-ppivots2   (make-nvector m -1 fixnum))))
-    (dotimes (k m)
-      (setf (aref (basis-col-hrefs b) k) (make-vector fixnum)
-	    (aref (basis-col-is b) k)    (make-vector fixnum)
-	    (aref (basis-row-js b) k)    (make-vector fixnum)
-	    (aref (basis-row-cis b) k)   (make-vector fixnum)
-	    (aref (basis-row-hrefs b) k) (make-vector fixnum)
-	    (aref (basis-l-columns b) k) (make-lu-eta-matrix)))
-    b))
+;;;; Generates a dual feasible basis using the slack variables
+(defun make-phase1-initial-basis (lp)
+  (let* ((m (length (lp-active-row-refs lp)))
+	 (n (length (lp-columns lp)))
+	 (header (make-nvector m 0 fixnum))
+	 (rcosts (make-nvector n 0 rational))
+	 (flags  (make-nvector n 'unknown))
+	 (values (make-nvector m 0 rational)))
+    ;; set flags to best bound
+    (phase1-initial-nonbasic-flags lp flags)
+    ;; set phase1 reduced costs
+    (dotimes (j n)
+      (let ((flag (aref flags j)))
+	(when (or (eq flag 'nonbasic-lower-bound)
+		  (eq flag 'nonbasic-upper-bound))
+	  (setf (aref rcosts j)
+		(* (- (lp-obj-sense lp)) (column-c (aref (lp-columns lp) j)))))))
+    ;; build basis header from slack variables
+    ;; and set basic variable values
+    (dotimes (i m)
+      (let* ((v 0)
+	     (row-ref (aref (lp-active-row-refs lp) i))
+	     (row (aref (lp-rows lp) row-ref))
+	     (slack-col-ref (row-slack-col-ref row)))
+	(dotimes (k (length (row-col-refs row)))
+	  (let* ((col-ref (aref (row-col-refs row) k))
+		 (flag (aref flags col-ref))
+		 (col (aref (lp-columns lp) col-ref))
+		 (a (rational-in-column col (aref (row-col-indices row) k))))
+	    (cond ((= col-ref slack-col-ref))
+		  ((and (eq flag 'nonbasic-lower-bound)
+			(not (column-has-l col)))
+		   (decf v a))
+		  ((and (eq flag 'nonbasic-upper-bound)
+			(not (column-has-u col)))
+		   (incf v a)))))
+	(setf (aref values i) (- v)
+	      (aref header i) slack-col-ref)))
+    ;; return basis instance
+    (let ((matrix (make-basis-matrix :lp lp)))
+      (fill-basis-matrix matrix lp header)
+      (%make-basis
+       :matrix matrix
+       :header header
+       :obj-value (phase1-initial-objective-value lp flags)
+       :dse-weights (make-nvector m 1 rational)
+       :reduced-costs rcosts 
+       :column-flags flags
+       :primal-values values))))
+    
 
 
-
-;;;; Resets basis	 
-(defun reset-basis (b)
-  (let ((m (basis-size b)))
-    (setf (basis-is-singular b) nil
-	  (basis-singular-ref b) -1
-	  (fill-pointer (basis-refs b)) m
-	  (fill-pointer (basis-flags b)) m
-	  (fill-pointer (basis-spikes b)) m
-	  (fill-pointer (basis-col-hrefs b)) m
-	  (fill-pointer (basis-col-is b)) m
-	  (fill-pointer (basis-col-nnz b)) m
-	  (fill-pointer (basis-row-hrefs b)) m
-	  (fill-pointer (basis-row-js b)) m
-	  (fill-pointer (basis-row-cis b)) m
-	  (fill-pointer (basis-row-nnz b)) m
-	  (fill-pointer (basis-i->pi b)) m
-	  (fill-pointer (basis-j->pj b)) m
-	  (fill-pointer (basis-pi->i b)) m
-	  (fill-pointer (basis-pj->j b)) m
-	  (fill-pointer (basis-href->hi b)) 0
-	  (fill-pointer (basis-hi->href b)) 0
-	  (fill-pointer (basis-heap-js b)) 0
-	  (fill-pointer (basis-heap-is b)) 0
-	  (fill-pointer (basis-heap-cis b)) 0
-	  (fill-pointer (basis-u-columns b)) 0)
-    (when (< (length (basis-refs b)) m)
-      (setf (fill-pointer (basis-refs b)) m))
-    (dotimes (k m)
-      (setf (fill-pointer (aref (basis-row-js b) k)) 0
-	    (fill-pointer (aref (basis-row-cis b) k)) 0
-	    (fill-pointer (aref (basis-row-hrefs b) k)) 0
-	    (fill-pointer (aref (basis-col-hrefs b) k)) 0
-	    (fill-pointer (aref (basis-col-is b) k)) 0
-	    (aref (basis-refs b) k) k
-	    (aref (basis-spikes b) k) m
-	    (aref (basis-col-nnz b) k) 0
-	    (aref (basis-row-nnz b) k) 0
-	    (aref (basis-i->pi b) k) k
-	    (aref (basis-pi->i b) k) k
-	    (aref (basis-j->pj b) k) k
-	    (aref (basis-pj->j b) k) k)
-      (let ((l_k (aref (basis-l-columns b) k)))
-	(setf (lu-eta-matrix-j l_k) k)
-	(reset-lu-eta-matrix l_k)))))
+;;;;
+(defun nonbasic-value (in-phase1 col flag)
+  (if in-phase1
+      (cond ((eq flag 'nonbasic-lower-bound)
+	     (if (column-has-l col) 0 -1))
+	    ((eq flag 'nonbasic-upper-bound)
+	     (if (column-has-u col) 0 1))
+	    (t
+	     (error "inappropriate flag for phase 1")))
+      (cond ((and (eq flag 'nonbasic-lower-bound)
+		  (column-has-l col))
+	     (column-l col))
+	    ((and (eq flag 'nonbasic-upper-bound)
+		  (column-has-u col))
+	     (column-u col))
+	    (t
+	     (error "inappropriate flag for phase 2")))))
 
 
-
-;;;; Singularity declaration
-(defun basis-row-is-redundant (b i)
-  (setf (basis-is-singular b) 'redundant-row
-	(basis-singular-ref b) i))
-
-(defun basis-column-is-redundant (b j)
-  (setf (basis-is-singular b) 'redundant-column
-	(basis-singular-ref b) j))
-
-	
-	      
-
-
-;;;;; Output functions
-
-(defun print-2d-array (a)
-  (dotimes (i (array-dimension a 0) (format t "~%"))
-    (dotimes (j (array-dimension a 1) (format t "~%"))
-      (if (zerop (aref a i j))
-	  (format t "   .   ")
-	  (format t "~6,2F " (float (aref a i j)))))))
-
-(defun print-basis-l (b)
-  (let* ((m (basis-size b))
-	 (j->pj (basis-j->pj b))
-	 (i->pi (basis-i->pi b))
-	 (a (make-array (list m m) :initial-element 0 :element-type 'rational)))
-    (dotimes (j m)
-      (let* ((l_j  (aref (basis-l-columns b) j))
-	     (is   (lu-eta-matrix-is l_j))
-	     (vis  (lu-eta-matrix-vis l_j))
-	     (n-nz (length is))
-	     (f    (lu-eta-matrix-coef l_j)))
-	(dotimes (k n-nz)
-	  (setf (aref a (aref i->pi (aref is k)) (aref j->pj j)) (* f (aref vis k))))))
-    (print-2d-array a)))
-
-(defun print-basis-u (b)
-  (let* ((m (basis-size b))
-	 (j->pj (basis-j->pj b))
-	 (i->pi (basis-i->pi b))
-	 (a (make-array (list m m) :initial-element 0 :element-type 'rational)))
-    (dotimes (k m)
-      (setf (aref a k k) 1))
-    (dotimes (k (length (basis-u-columns b)))
-      (let* ((u    (aref (basis-u-columns b) k))
-	     (j    (lu-eta-matrix-j u))
-	     (is   (lu-eta-matrix-is u))
-	     (vis  (lu-eta-matrix-vis u))
-	     (n-nz (length is))
-	     (f    (lu-eta-matrix-coef u)))
-	(dotimes (r n-nz)
-	  (setf (aref a (aref i->pi (aref is r)) (aref j->pj j)) (* f (aref vis r))))))
-    (print-2d-array a)))
-	
-(defun print-basis-nz (b)
-  (let* ((m (basis-size b))
-	 (j->pj (basis-j->pj b))
-	 (i->pi (basis-i->pi b))
-	 (a (make-array (list m m) :initial-element 0 :element-type 'rational)))
-    (dotimes (j m)
-      (let* ((l_j  (aref (basis-l-columns b) j))
-	     (is   (lu-eta-matrix-is l_j))
-	     (vis  (lu-eta-matrix-vis l_j))
-	     (n-nz (length is))
-	     (f    (lu-eta-matrix-coef l_j)))
-	(dotimes (k n-nz)
-	  (setf (aref a (aref i->pi (aref is k)) (aref j->pj j)) (* f (aref vis k))))))
-    (dotimes (i (array-dimension a 0) (format t "~%"))
-      (dotimes (j (array-dimension a 1) (format t "~%"))
-	(if (zerop (aref a i j))
-	    (format t " .")
-	    (format t " x"))))))
-      
 
