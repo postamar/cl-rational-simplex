@@ -7,64 +7,33 @@
   obj-spec
   row-spec
   row-rhss
-  row-lhss
   col-lbounds
   col-ubounds
   col-spec)
 
    
 
-;;; trims whitespace left and right of string
-(defun whitespace-trim (line)
-  (let ((l 0)
-	(r (length line)))
-    (dotimes (i (length line))
-      (if (or (char-equal (char line l) #\Space)
-		  (char-equal (char line l) #\Tab))
-	  (incf l)
-	  (return)))
-    (dotimes (i (length line))
-      (if (or (char-equal (char line (- r 1)) #\Space)
-	      (char-equal (char line (- r 1)) #\Tab))
-	  (decf r)
-	  (return)))
-    (if (<= r l)
-	""
-	(subseq line l r))))
-	
-  
-
 ;;; scans one line from the MPS file into a list
 (defun listify (line)
-  (cond ((zerop (length line))
-	 '())
-	((not (or (char-equal (char line 0) #\Space)
-		  (char-equal (char line 0) #\Tab)))
-	 (if (and (<= 4 (length line))
-		  (string-equal "NAME" (subseq line 0 4)))
-	     (list "NAME" (subseq line 14 (min 22 (length line))))
-	     (dotimes (i (length line) (list line))
-	       (when (or (char-equal (char line i) #\Space)
-			 (char-equal (char line i) #\Tab))
-		 (return (list (subseq line 0 i)))))))
-	(t 
-	 (let ((linelist '()))
-	   (when (<= 0 (length line))
-	     (push (subseq line 1 (min 3 (length line))) linelist)
-	     (when (<= 4 (length line))
-	       (push (subseq line 4 (min 12 (length line))) linelist)
-	       (when (<= 14 (length line))
-		 (push (subseq line 14 (min 22 (length line))) linelist)
-		 (when (<= 24 (length line))
-		   (push (subseq line 24 (min 36 (length line))) linelist)
-		   (when (<= 39 (length line))
-		     (push (subseq line 39 (min 47 (length line))) linelist)
-		     (when (<= 49 (length line))
-		       (push (subseq line 49 (min 61 (length line))) linelist)))))))
-	   (nreverse
-	    (loop for elt in linelist
-	       unless (string-equal "" (whitespace-trim elt))
-	       collect (whitespace-trim elt)))))))
+  (let ((prec 0)
+	(space nil)
+	(list '())
+	(line-length (length line)))
+    (dotimes (i line-length 
+	      (nreverse (if (= prec i) 
+			    list 
+			    (cons (subseq line prec line-length) list))))
+      (if (or (char-equal (char line i) #\Space)
+	      (char-equal (char line i) #\Tab))
+	  (if space
+	      (incf prec)
+	      (setf list (if (= prec i) 
+			     list 
+			     (cons (subseq line prec i) list))
+		    space t 
+		    prec (+ i 1)))
+	  (setf space nil)))))
+	      
 
 
 ;;; reads the next non-empty line in the MPS file
@@ -80,18 +49,16 @@
 
 
 ;;; reads a block in the MPS file (rows, columns, etc.)
-(defmacro read-mps-block (mps-stream block end-tags)
+(defmacro read-mps-block (mps-stream block end-tag)
   (let ((line-list (gensym)))
     `(loop
 	(let ((,line-list (get-next-line-list ,mps-stream)))
 	  (unless ,line-list
 	    (setf ,block nil)
 	    (return))
-	  (when (or ,@(mapcar 
-		       #'(lambda (tag) 
-			   `(string= ,tag (car ,line-list)))
-		       (cons "ENDATA" end-tags)))
-	    (return (car ,line-list)))
+	  (when (or (string= ,end-tag (car ,line-list))
+		    (string= "ENDATA" (car ,line-list)))
+	    (return))
 	  (push ,line-list ,block)))))
 
 
@@ -110,16 +77,126 @@
 	   (error "parse error in MPS file, column section")))))
 
 
+;;; turns the data in the mps structure into something actually usable, in standard form
+;;; TODO: model checking
+;;; - type the bound arrays properly
+;;; - very basic preprocessing
+(defun mps->raw (mps-data n-named n-slack m)
+  (let ((raw (make-lp-data))
+	(n (+ n-named n-slack))
+	(slack-col n-named)
+	(row-factor (make-array m :initial-element 1 :element-type 'rational))
+	(row-index-by-name (make-hash-table :test 'equal))
+	(col-index-by-name (make-hash-table :test 'equal)))
+
+    (setf (lp-data-lp-name raw) (mps-lp-name mps-data)
+	  (lp-data-obj-name raw) (car (mps-obj-spec mps-data))
+	  (lp-data-obj-sense raw) (cdr (mps-obj-spec mps-data))
+	  (lp-data-n raw) n
+	  (lp-data-m raw) m
+	  (lp-data-c raw) (make-array n :initial-element 0 :element-type 'rational)
+	  (lp-data-b raw) (make-array m :initial-element 0 :element-type 'rational)
+	  (lp-data-l raw) (make-array n :initial-element 0 :element-type 'rational)
+	  (lp-data-u raw) (make-array n :initial-element 0 :element-type 'rational)
+	  (lp-data-l-p raw) (make-array n :initial-element 1 :element-type 'bit)
+	  (lp-data-u-p raw) (make-array n :initial-element 0 :element-type 'bit)
+	  (lp-data-row-names raw) (make-array m :initial-element "" :element-type 'string)
+	  (lp-data-col-names raw) (make-array n :initial-element "" :element-type 'string)
+	  (lp-data-A-indices raw) (make-array n)
+	  (lp-data-A-values raw) (make-array n))
+
+
+    ;; fill in row name array
+    (let ((i 0))
+      (dolist (row (mps-row-spec mps-data))
+	(setf (aref (lp-data-row-names raw) i) (car row))
+	(setf (gethash (car row) row-index-by-name) i)
+	(incf i)))
+
+    ;; fill in column name array
+    (let ((i 0))
+      (dolist (col (mps-col-spec mps-data))
+	(setf (aref (lp-data-col-names raw) i) (car col))
+	(setf (gethash (car col) col-index-by-name) i)
+	(incf i)))
+    (dotimes (j n-slack)
+      (setf (aref (lp-data-col-names raw) (+ n-named j))
+	    (concatenate 'string "slack" (princ-to-string j))))
+
+    ;; fill b and check for non-negativity
+    (dolist (rhs (mps-row-rhss mps-data))
+      (let ((i (gethash (car rhs) row-index-by-name))
+	    (b_i (cdr rhs)))
+	(when (< b_i 0)
+	  (setf b_i (- b_i)
+		(aref row-factor i) -1))
+	(setf (aref (lp-data-b raw) i) b_i)))
+
+    ;; add slack variable coefficients to A
+    (dolist (row (mps-row-spec mps-data))
+      (unless (eq (cdr row) '=)
+	(let ((i (gethash (car row) row-index-by-name)))
+	  (when (eq (cdr row) '>=)
+	    (setf (aref row-factor i) (- (aref row-factor i))))
+	  (setf (aref (lp-data-A-indices raw) slack-col)
+		(make-array 1 
+			    :initial-element i
+			    :element-type 'fixnum))
+	  (setf (aref (lp-data-A-values raw) slack-col)
+		(make-array 1
+			    :initial-element (aref row-factor i)
+			    :element-type 'rational))
+	  (incf slack-col))))
+
+    ;; fill c and A
+    (dolist (col (mps-col-spec mps-data))
+      (let ((j (gethash (car col) col-index-by-name))
+	    (c 0)
+	    (alist '()))
+	(dolist (coef (cdr col))
+	  (destructuring-bind (row-name . a_ij) coef
+	    (if (equal row-name (lp-data-obj-name raw))
+		(setf (aref (lp-data-c raw) j) a_ij)
+		(push (cons (gethash row-name row-index-by-name) a_ij) alist))))
+	(let ((alist-length (length alist)))
+	  (setf (aref (lp-data-A-indices raw) j)
+		(make-array alist-length :initial-element -1 :element-type 'fixnum)
+		(aref (lp-data-A-values raw) j)
+		(make-array alist-length :initial-element 0 :element-type 'rational)))
+	(setf alist (sort alist #'< :key #'car))
+	(dolist (pair alist) 
+	  (destructuring-bind (i . a_ij) pair
+	    (setf (aref (aref (lp-data-A-indices raw) j) c) i
+		  (aref (aref (lp-data-A-values raw) j) c) a_ij)
+	    (incf c)))))
+	    
+
+    ;; fill l and u
+    (dolist (lbound (mps-col-lbounds mps-data))
+      (let ((i (gethash (car lbound) col-index-by-name))
+	    (l_i (cdr lbound)))
+	(setf (bit (lp-data-l-p raw) i) 1
+	      (aref (lp-data-l raw) i) l_i)))
+	
+    (dolist (ubound (mps-col-ubounds mps-data))
+      (let ((i (gethash (car ubound) col-index-by-name))
+	    (u_i (cdr ubound)))
+	(setf (bit (lp-data-u-p raw) i) 1
+	      (aref (lp-data-u raw) i) u_i)))
+
+    ;; return data structure
+    raw))
+	  
+
 
 ;;; this function opens, reads and parses an MPS file
-;;; it returns an mps structure
+;;; it returns an lp-data structure
 (defun load-from-mps (mps-full-file-name)
   (let ((data)
 	(header)
 	(rows)
 	(columns)
 	(rhss)
-	(lhss)
 	(bounds)
 	(n-named 1)
 	(n-slack 0)
@@ -129,12 +206,11 @@
 				      :name mps-full-file-name) 
 		       :direction :input)
 
-      (read-mps-block mps-stream header ("ROWS"))
-      (read-mps-block mps-stream rows ("COLUMNS"))
-      (read-mps-block mps-stream columns ("RHS")) 
-      (when (string= "RANGES" (read-mps-block mps-stream rhss ("BOUNDS" "RANGES")))
-	(read-mps-block mps-stream lhss ("BOUNDS")))
-      (read-mps-block mps-stream bounds nil))
+      (read-mps-block mps-stream header "ROWS")
+      (read-mps-block mps-stream rows "COLUMNS")
+      (read-mps-block mps-stream columns "RHS")
+      (read-mps-block mps-stream rhss "BOUNDS")
+      (read-mps-block mps-stream bounds "ENDATA"))
 
     ;; gross error check
     (unless (and header rows columns)
@@ -215,29 +291,6 @@
 	      (t
 	       (error "parse error in MPS file, rhs section")))))
 
-
-    ;; parse the ranges, if they exist
-    (when lhss
-      (dolist (lhs lhss)
-	(let ((length (length lhs)))
-	  (when (or (= length 3) 
-		    (= length 5))
-	    (decf length)
-	    (pop lhs))
-	  (cond ((= length 2)
-		 (destructuring-bind (n1 v1) lhs
-		   (push (cons n1 (rationalize (read-from-string v1))) 
-			 (mps-row-lhss data))))
-		((= length 4)
-		 (destructuring-bind (n1 v1 n2 v2) lhs
-		   (push (cons n2 (rationalize (read-from-string v2))) 
-			 (mps-row-lhss data))
-		   (push (cons n1 (rationalize (read-from-string v1))) 
-			 (mps-row-lhss data))))
-		(t
-		 (error "parse error in MPS file, range section"))))))
-
-
     ;; parse the bounds, if they exist
     (dolist (bound bounds)
       (let ((type (car bound))
@@ -257,13 +310,10 @@
 	      ((string= type "FR")
 	       (push (cons name nil) (mps-col-ubounds data))
 	       (push (cons name nil) (mps-col-lbounds data)))
-	      ((string= type "PL")
-	       (push (cons name nil) (mps-col-ubounds data)))
-	      ((string= type "MI")
-	       (push (cons name nil) (mps-col-lbounds data)))
 	      (t
 	       (error "parse error in MPS file, bounds section")))))
-    (values data n-named n-slack m)))
+
+    (mps->raw data n-named n-slack m)))
 	     
 
   
