@@ -12,35 +12,37 @@
 	 (cdenom 1))
     ;; load basic variable costs into input vector
     (dotimes (k m)
-      (let* ((col (aref (lp-columns lp) (aref bh k)))
-	     (cd (denominator (column-c col))))
-	(mulf cdenom (/ cd (gcd cd cdenom)))))
-    (setf (simplex-vector-coef sd) (/ 1 cdenom)
-	  (fill-pointer (simplex-vector-indices sd)) 0
-	  (fill-pointer (simplex-vector-values sd)) 0)
+      (let* ((col (adjvector-column-ref (lp-columns lp) (aref bh k)))
+	     (c (column-c col))
+	     (cd (denominator c)))
+	(unless (zerop c)
+	  (mulf cdenom (/ cd (gcd cd cdenom))))))
+    (setf (hsv-coef (simplex-hsv sd)) (/ 1 cdenom)
+	  (hsv-length (simplex-hsv sd)) 0)
     (dotimes (k m)
-      (let* ((col (aref (lp-columns lp) (aref bh k)))
+      (let* ((col (adjvector-column-ref (lp-columns lp) (aref bh k)))
 	     (c (column-c col)))
 	(assert (= (denominator c) (gcd (denominator c) cdenom)))
-	(vector-push-extend k (simplex-vector-indices sd))
-	(vector-push-extend (* (numerator c) (/ cdenom (denominator c)))
-			    (simplex-vector-values sd))))
+	(assert (integerp  (* (numerator c) (/ cdenom (denominator c)))))
+	(unless (zerop c)
+	  (hsv-add k (* (numerator c) (/ cdenom (denominator c))) (simplex-hsv sd)))))
     ;; compute multipliers
-    (simplex-btran sd)
-    (copy-vector-from-tran sd)
+    (btran (simplex-btran sd) (simplex-hsv sd))
+    (check-btran sd (simplex-btran sd) (simplex-hsv sd))
     ;; compute reduced costs
-    (assert (= n (length (simplex-pivot-row sd))))
     (dotimes (j n)
-      (setf (aref (simplex-pivot-row sd) j)
-	    (- (column-c (aref (lp-columns lp) j)))))
+      (setf (aref rcosts j)
+	    (if (eq (aref flags j) 'basic)
+		0
+		(lp-get-cost lp j))))
     (compute-pivot-row sd)
-    (dotimes (j n)
-      (let ((flag (aref flags j)))
-	(setf (aref rcosts j) 
-	      (if (eq flag 'basic)
-		  0
-		  (- (aref (simplex-pivot-row sd) j))))
-	(setf (aref (simplex-pivot-row sd) j) 0)))))
+    (dotimes (k (simplex-pivot-row-length sd))
+      (let ((j (aref (simplex-pivot-row-col-refs sd) k)))
+	(unless (eq (aref flags j) 'basic)
+	  (decf (aref rcosts j) 
+		(aref (simplex-pivot-row-values sd) k)))))
+    (setf (simplex-pivot-row-length sd) 0)))
+
 
 
 
@@ -49,21 +51,22 @@
   (let* ((b (simplex-basis sd))
 	 (lp (simplex-lp sd))
 	 (bm (basis-matrix b))
-	 (tr (simplex-tran sd))
+	 (tr (simplex-ftran sd))
 	 (m (basis-matrix-size bm))
 	 (flags (basis-column-flags b))
-	 (rhs (make-nvector m 0 rational))
+	 (infeas (basis-primal-infeas b))
+	 (rhs (make-array m :initial-element 0 :element-type 'rational))
 	 (cdenom 1))
     ;; compute right-hand side in solving Bb = rhs for b
     (dotimes (i m)
       (let* ((v 0)
-	     (row-ref (aref (lp-active-row-refs lp) i))
-	     (row (aref (lp-rows lp) row-ref)))
-	(dotimes (k (length (row-col-refs row)))
-	  (let* ((col-ref (aref (row-col-refs row) k))
+	     (row-ref (adjvector-fixnum-ref (lp-active-row-refs lp) i))
+	     (row (adjvector-row-ref (lp-rows lp) row-ref)))
+	(dotimes (k (adjvector-fixnum-fill-pointer (row-col-refs row)))
+	  (let* ((col-ref (adjvector-fixnum-ref (row-col-refs row) k))
 		 (flag (aref flags col-ref))
-		 (col (aref (lp-columns lp) col-ref))
-		 (a (rational-in-column col (aref (row-col-indices row) k))))
+		 (col (adjvector-column-ref (lp-columns lp) col-ref))
+		 (a (rational-in-column col (adjvector-fixnum-ref (row-col-indices row) k))))
 	    (cond ((eq flag 'nonbasic-lower-bound)
 		   (assert (column-has-l col))
 		   (decf v (* a (column-l col))))
@@ -73,23 +76,33 @@
 	(setf (aref rhs i) v)
 	(mulf cdenom (/ (denominator v) (gcd (denominator v) cdenom)))))
     ;; set rhs for solving Bb = rhs for b
-    (setf (simplex-vector-coef sd) (/ 1 cdenom)
-	  (fill-pointer (simplex-vector-indices sd)) 0
-	  (fill-pointer (simplex-vector-values sd)) 0)
+    (setf (hsv-coef (simplex-hsv sd)) (/ 1 cdenom)
+	  (hsv-length (simplex-hsv sd)) 0)
     (dotimes (i m)
       (setf (aref (basis-primal-values b) i) 0)
       (let ((v (aref rhs i)))
 	(unless (zerop v)
-	  (vector-push-extend i (simplex-vector-indices sd))
-	  (vector-push-extend (* (numerator v) (/ cdenom (denominator v)))
-			      (simplex-vector-values sd)))))
-    (simplex-ftran sd)
-    ;; fill primal value array
-    (dotimes (k (length (tran-indices tr)))
-      (let ((i (aref (tran-indices tr) k))
-	    (x (* (tran-coef tr) (aref (tran-values tr) k))))
-	(setf (aref (basis-primal-values b) i) x)))))
-
+	  (hsv-add i (* (numerator v) (/ cdenom (denominator v))) (simplex-hsv sd)))))
+    (ftran tr (simplex-hsv sd))
+    (check-ftran sd tr (simplex-hsv sd))
+    ;; fill primal value array and infeasability vector
+    (dotimes (k (hsv-length (tran-hsv tr)))
+      (let ((i (aref (hsv-is (tran-hsv tr)) k))
+	    (x (* (hsv-coef (tran-hsv tr)) (aref (hsv-vis (tran-hsv tr)) k))))
+	(setf (aref (basis-primal-values b) i) x)))
+    (reset-splay-tree-fixnum-rational infeas)
+    (dotimes (i m)
+      (let ((col (adjvector-column-ref (lp-columns lp) (aref (basis-header b) i)))
+	    (x (aref (basis-primal-values b) i)))
+	(cond ((and (column-has-l col) (< x (column-l col)))
+	       (splay-tree-fixnum-rational-set infeas i 
+					       (* (- (column-l col) x)
+						  (- (column-l col) x))))
+	      ((and (column-has-u col) (< (column-u col) x))
+	       (splay-tree-fixnum-rational-set infeas i 
+					       (* (- x (column-u col))
+						  (- x (column-u col))))))))))
+	
 
 ;;;;    
 (defun simplex-prepare-phase2 (sd)
@@ -103,8 +116,8 @@
     ;; compute reduced costs
     (simplex-compute-reduced-costs sd)
     ;; set nonbasic variable flags and compute objective value
-    (dotimes (j (length (lp-columns lp)))
-      (let* ((col (aref (lp-columns lp) j))
+    (dotimes (j (adjvector-column-fill-pointer (lp-columns lp)))
+      (let* ((col (adjvector-column-ref (lp-columns lp) j))
 	     (c (* (- (lp-obj-sense lp)) (column-c col)))
 	     (d (aref (basis-reduced-costs b) j))
 	     (flag (aref flags j)))
@@ -141,58 +154,66 @@
     ;; finish compute objective value
     (dotimes (k m)
       (incf z (* (- (lp-obj-sense lp)) 
-		 (column-c (aref (lp-columns lp) (aref (basis-header b) k)))
+		 (column-c (adjvector-column-ref (lp-columns lp) (aref (basis-header b) k)))
 		 (aref (basis-primal-values b) k))))
     (setf (basis-obj-value b) z)))
 
 
 
 ;;;;
-(defun dual-simplex (sd &key (min-z) (max-z) (cutoff) (phase1only nil))
+(defun dual-simplex (sd &key (min-z) (max-z) (max-total-iters) (max-phase1-iters) (max-phase2-iters))
   (symbol-macrolet 
       ((b (simplex-basis sd))
+       (st (simplex-stats sd))
        (z (basis-obj-value (simplex-basis sd))))
-    (let ((n-iterations 0))
-      ;; phase 1
-      (loop
-	 (print (float z))
-	 (cond 
-	   ((= z 0)
-	    (return))
-	   ((and cutoff (<= cutoff n-iterations))
-	    (return-from dual-simplex 'iteration-cutoff)))
-	 (incf n-iterations)
-	 (let ((status (simplex-iteration sd)))
-	   (cond ((eq status 'dual-feasible))
-		 ((eq status 'optimal)
-		  (if (< z 0)
-		      (return-from dual-simplex 'unbounded)
-		      (return)))
-		 (t
-		  (return-from dual-simplex status)))))
-      ;; phase 2
-      (check-dual-feasability sd)
-      (when phase1only
-	(return-from dual-simplex 'dual-feasible))
-      (print 'phase2)
-      (simplex-prepare-phase2 sd)
-      (check-dual-feasability sd)
-      (check-primal-values sd)
-      (loop 
-	 (print (float z))
-	 (cond 
-	   ((and min-z (<= z min-z))
-	    (return-from dual-simplex 'reached-min-z))
-	   ((and max-z (<= max-z z))
-	    (return-from dual-simplex 'reached-max-z))
-	   ((and cutoff (<= cutoff n-iterations))
-	    (return-from dual-simplex 'iteration-cutoff)))
-	 (incf n-iterations)
-	 (let ((status (simplex-iteration sd)))
-	   (check-primal-update-phase2 sd)
-	   (check-primal-values sd)
-	   (unless (eq status 'dual-feasible)
-	     (return-from dual-simplex status)))))))
+    (check-infeas-vector b (simplex-lp sd))
+    ;; phase 1
+    (loop
+    ;   (print (float z))
+       (cond 
+	 ((= z 0)
+	  (return))
+	 ((and max-phase1-iters (<= max-phase1-iters (stats-phase1-iters st)))
+	  (return-from dual-simplex 'phase1-iteration-count-cutoff))
+	 ((and max-total-iters (<= max-total-iters (stats-total-iters st)))
+	  (return-from dual-simplex 'total-iteration-count-cutoff)))
+       (incf (stats-phase1-iters st))
+       (incf (stats-total-iters st))
+       (let ((status (simplex-iteration sd)))
+	 (cond ((eq status 'dual-feasible))
+	       ((eq status 'optimal)
+		(if (< z 0)
+		    (return-from dual-simplex 'unbounded)
+		    (return)))
+	       (t
+		(return-from dual-simplex status)))))
+    ;; phase 2
+    (check-dual-feasability sd)
+    (when (and max-phase2-iters (zerop max-phase2-iters))
+      (return-from dual-simplex 'dual-feasible))
+    (print 'phase2)
+    (simplex-prepare-phase2 sd)
+    (check-infeas-vector b (simplex-lp sd))
+    (check-dual-feasability sd)
+    (check-primal-values sd)
+    (loop 
+    ;   (print (float z))
+       (cond 
+	 ((and min-z (<= z min-z))
+	  (return-from dual-simplex 'reached-min-z))
+	 ((and max-z (<= max-z z))
+	  (return-from dual-simplex 'reached-max-z))
+	 ((and max-phase2-iters (<= max-phase2-iters (stats-phase2-iters st)))
+	  (return-from dual-simplex 'phase2-iteration-count-cutoff))
+	 ((and max-total-iters (<= max-total-iters (stats-total-iters st)))
+	  (return-from dual-simplex 'total-iteration-count-cutoff)))
+       (incf (stats-phase2-iters (simplex-stats sd)))
+       (incf (stats-total-iters (simplex-stats sd)))
+       (let ((status (simplex-iteration sd)))
+	 (check-primal-update-phase2 sd)
+	 (check-primal-values sd)
+	 (unless (eq status 'dual-feasible)
+	   (return-from dual-simplex status))))))
 
 
 

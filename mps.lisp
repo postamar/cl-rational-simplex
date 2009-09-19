@@ -7,33 +7,64 @@
   obj-spec
   row-spec
   row-rhss
+  row-lhss
   col-lbounds
   col-ubounds
   col-spec)
 
    
 
+;;; trims whitespace left and right of string
+(defun whitespace-trim (line)
+  (let ((l 0)
+	(r (length line)))
+    (dotimes (i (length line))
+      (if (or (char-equal (char line l) #\Space)
+		  (char-equal (char line l) #\Tab))
+	  (incf l)
+	  (return)))
+    (dotimes (i (length line))
+      (if (or (char-equal (char line (- r 1)) #\Space)
+	      (char-equal (char line (- r 1)) #\Tab))
+	  (decf r)
+	  (return)))
+    (if (<= r l)
+	""
+	(subseq line l r))))
+	
+  
+
 ;;; scans one line from the MPS file into a list
 (defun listify (line)
-  (let ((prec 0)
-	(space nil)
-	(list '())
-	(line-length (length line)))
-    (dotimes (i line-length 
-	      (nreverse (if (= prec i) 
-			    list 
-			    (cons (subseq line prec line-length) list))))
-      (if (or (char-equal (char line i) #\Space)
-	      (char-equal (char line i) #\Tab))
-	  (if space
-	      (incf prec)
-	      (setf list (if (= prec i) 
-			     list 
-			     (cons (subseq line prec i) list))
-		    space t 
-		    prec (+ i 1)))
-	  (setf space nil)))))
-	      
+  (cond ((zerop (length line))
+	 '())
+	((not (or (char-equal (char line 0) #\Space)
+		  (char-equal (char line 0) #\Tab)))
+	 (if (and (<= 4 (length line))
+		  (string-equal "NAME" (subseq line 0 4)))
+	     (list "NAME" (subseq line 14 (min 22 (length line))))
+	     (dotimes (i (length line) (list line))
+	       (when (or (char-equal (char line i) #\Space)
+			 (char-equal (char line i) #\Tab))
+		 (return (list (subseq line 0 i)))))))
+	(t 
+	 (let ((linelist '()))
+	   (when (<= 0 (length line))
+	     (push (subseq line 1 (min 3 (length line))) linelist)
+	     (when (<= 4 (length line))
+	       (push (subseq line 4 (min 12 (length line))) linelist)
+	       (when (<= 14 (length line))
+		 (push (subseq line 14 (min 22 (length line))) linelist)
+		 (when (<= 24 (length line))
+		   (push (subseq line 24 (min 36 (length line))) linelist)
+		   (when (<= 39 (length line))
+		     (push (subseq line 39 (min 47 (length line))) linelist)
+		     (when (<= 49 (length line))
+		       (push (subseq line 49 (min 61 (length line))) linelist)))))))
+	   (nreverse
+	    (loop for elt in linelist
+	       unless (string-equal "" (whitespace-trim elt))
+	       collect (whitespace-trim elt)))))))
 
 
 ;;; reads the next non-empty line in the MPS file
@@ -49,16 +80,18 @@
 
 
 ;;; reads a block in the MPS file (rows, columns, etc.)
-(defmacro read-mps-block (mps-stream block end-tag)
+(defmacro read-mps-block (mps-stream block end-tags)
   (let ((line-list (gensym)))
     `(loop
 	(let ((,line-list (get-next-line-list ,mps-stream)))
 	  (unless ,line-list
 	    (setf ,block nil)
 	    (return))
-	  (when (or (string= ,end-tag (car ,line-list))
-		    (string= "ENDATA" (car ,line-list)))
-	    (return))
+	  (when (or ,@(mapcar 
+		       #'(lambda (tag) 
+			   `(string= ,tag (car ,line-list)))
+		       (cons "ENDATA" end-tags)))
+	    (return (car ,line-list)))
 	  (push ,line-list ,block)))))
 
 
@@ -86,6 +119,7 @@
 	(rows)
 	(columns)
 	(rhss)
+	(lhss)
 	(bounds)
 	(n-named 1)
 	(n-slack 0)
@@ -95,11 +129,12 @@
 				      :name mps-full-file-name) 
 		       :direction :input)
 
-      (read-mps-block mps-stream header "ROWS")
-      (read-mps-block mps-stream rows "COLUMNS")
-      (read-mps-block mps-stream columns "RHS")
-      (read-mps-block mps-stream rhss "BOUNDS")
-      (read-mps-block mps-stream bounds "ENDATA"))
+      (read-mps-block mps-stream header ("ROWS"))
+      (read-mps-block mps-stream rows ("COLUMNS"))
+      (read-mps-block mps-stream columns ("RHS")) 
+      (when (string= "RANGES" (read-mps-block mps-stream rhss ("BOUNDS" "RANGES")))
+	(read-mps-block mps-stream lhss ("BOUNDS")))
+      (read-mps-block mps-stream bounds nil))
 
     ;; gross error check
     (unless (and header rows columns)
@@ -179,6 +214,29 @@
 		       (mps-row-rhss data))))
 	      (t
 	       (error "parse error in MPS file, rhs section")))))
+
+
+    ;; parse the ranges, if they exist
+    (when lhss
+      (dolist (lhs lhss)
+	(let ((length (length lhs)))
+	  (when (or (= length 3) 
+		    (= length 5))
+	    (decf length)
+	    (pop lhs))
+	  (cond ((= length 2)
+		 (destructuring-bind (n1 v1) lhs
+		   (push (cons n1 (rationalize (read-from-string v1))) 
+			 (mps-row-lhss data))))
+		((= length 4)
+		 (destructuring-bind (n1 v1 n2 v2) lhs
+		   (push (cons n2 (rationalize (read-from-string v2))) 
+			 (mps-row-lhss data))
+		   (push (cons n1 (rationalize (read-from-string v1))) 
+			 (mps-row-lhss data))))
+		(t
+		 (error "parse error in MPS file, range section"))))))
+
 
     ;; parse the bounds, if they exist
     (dolist (bound bounds)

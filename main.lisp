@@ -16,14 +16,24 @@
 	       ("X3" ("COST" . 2) ("ROW1" . 2) ("ROW3". 8)))))
 |#
 
-(setf my-mps (load-from-mps "/Users/mariusposta/Code/netlib/afiro.mps"))
+
+
+
+(defun load-mps (name)
+  (when 
+      (setf my-mps 
+	    (load-from-mps 
+	     (concatenate 'string
+			  "/Users/mariusposta/Code/netlib/"
+			  name
+			  ".mps")))
+    t))
 
 (defun run ()
+  (setf *random-state* (make-random-state *simplex-random-state*))
   (setf my-lp (mps->lp my-mps))
-  ; (preprocess my-lp)
   (setf my-b (make-phase1-initial-basis my-lp))
   (setf my-sd (make-simplex my-lp my-b))
-  t)
-
+  (dual-simplex my-sd))
 
 

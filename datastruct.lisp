@@ -1,8 +1,111 @@
 ;;;;; The big data structure macro
 ;;;;;
 
+(defmacro define-adjustable-vector (type)
+  (let* ((namestr (concatenate 'string "ADJVECTOR-" (princ-to-string type)))
+	 (constr (concatenate 'string "%MAKE-" namestr))
+	 (makefull (concatenate 'string "MAKE-" namestr))
+	 (push (concatenate 'string namestr "-PUSH"))
+	 (pushext (concatenate 'string namestr "-PUSH-EXTEND"))
+	 (pop (concatenate 'string namestr "-POP"))
+	 (adjvv (concatenate 'string namestr "-DATA"))
+	 (adjvfp (concatenate 'string namestr "-FILL-POINTER"))
+	 (adjva (concatenate 'string namestr "-PREV-ALLOC-COUNTER"))
+	 (adjvb (concatenate 'string namestr "-CURRENT-ALLOC-COUNTER"))
+	 (adjvref (concatenate 'string namestr "-REF"))
+	 (setadjvref (concatenate 'string "SET-" namestr "-REF"))
+	 (ielt (gensym "INIT-ELEMENT-"))
+	 (elt (gensym "ELEMENT-"))
+	 (adjv (gensym "ADJVECTOR-"))
+	 (i (gensym "INDEX-"))
+	 (inalloc (gensym "INIT-ALLOC-SIZE-"))
+	 (a (gensym))
+	 (b (gensym))
+	 (a+b (gensym))
+	 (v (gensym)))
+    `(progn
+       (defstruct (,(intern namestr)
+		    (:constructor ,(intern constr)))
+	 (fill-pointer 0 :type fixnum)
+	 (prev-alloc-counter 0 :type fixnum)
+	 (current-alloc-counter 0 :type fixnum)
+	 (data (error "adjvector construction") 
+	       :type (simple-array ,type 1)))
+       (declaim (inline ,(intern makefull)))
+       (defun ,(intern makefull) (,ielt ,inalloc)
+	 (declare (optimize (debug 0) (safety 0) (speed 3)))
+	 (declare (,type ,ielt)
+		  (fixnum ,inalloc))
+	 (let ((,a 1)
+	       (,b 1))
+	   (declare (fixnum ,a ,b))
+	   (loop 
+	      (when (<= ,inalloc ,b)
+		(return))
+	      (rotatef ,a ,b)
+	      (incf ,b ,a))
+	   (,(intern constr)
+	     :prev-alloc-counter ,a
+	     :current-alloc-counter ,b
+	     :data (make-array ,b :initial-element ,ielt :element-type ',type))))
+       (declaim (inline ,(intern push)))
+       (defun ,(intern push) (,elt ,adjv)
+	 (declare (optimize (debug 0) (safety 0) (speed 3)))
+	 (declare (,type ,elt)
+		  (,(intern namestr) ,adjv))
+	 (setf (aref (,(intern adjvv) ,adjv) (,(intern adjvfp) ,adjv)) ,elt)
+	 (incf (,(intern adjvfp) ,adjv)))
+       (declaim (inline ,(intern pop)))
+       (defun ,(intern pop) (,adjv)
+	 (declare (optimize (debug 0) (safety 0) (speed 3)))
+	 (declare (,(intern namestr) ,adjv))
+	 (aref (,(intern adjvv) ,adjv) (decf (,(intern adjvfp) ,adjv))))
+       (declaim (inline ,(intern pushext)))
+       (defun ,(intern pushext) (,elt ,adjv)
+	 (declare (optimize (debug 0) (safety 0) (speed 3)))
+	 (declare (,type ,elt)
+		  (,(intern namestr) ,adjv))
+	 (if (<= (,(intern adjvb) ,adjv) (,(intern adjvfp) ,adjv))
+	     (if (zerop (,(intern adjvb) ,adjv))
+		 (setf (,(intern adjva) ,adjv) 1
+		       (,(intern adjvb) ,adjv) 1
+		       (,(intern adjvv) ,adjv) (make-array 1 :initial-element ,elt :element-type ',type)
+		       (,(intern adjvfp) ,adjv) 1)
+		 (progn 
+		   (let* ((,a (,(intern adjva) ,adjv))
+			  (,b (,(intern adjvb) ,adjv))
+			  (,a+b (+ ,a ,b))
+			  (,v (make-array ,a+b :initial-element ,elt :element-type ',type)))
+		     (declare (fixnum ,a ,b ,a+b)
+			      ((simple-array ,type 1) ,v))
+		     (replace ,v (,(intern adjvv) ,adjv))
+		     (setf (,(intern adjva) ,adjv) ,b
+			   (,(intern adjvb) ,adjv) ,a+b
+			   (,(intern adjvv) ,adjv) ,v)
+		     (incf (,(intern adjvfp) ,adjv)))))
+	     (,(intern push) ,elt ,adjv)))
+       (declaim (inline ,(intern adjvref)))
+       (defun ,(intern adjvref) (,adjv ,i)
+	 (declare (optimize (debug 0) (safety 0) (speed 3)))
+	 (declare (,(intern namestr) ,adjv)
+		  (fixnum ,i))
+	 (assert (< -1 ,i (,(intern adjvfp) ,adjv)))
+	 (aref (,(intern adjvv) ,adjv) ,i))
+       (declaim (inline ,(intern setadjvref)))
+       (defun ,(intern setadjvref) (,adjv ,i ,elt)
+	 (declare (optimize (debug 0) (safety 0) (speed 3)))
+	 (declare (,(intern namestr) ,adjv)
+		  (fixnum ,i)
+		  (,type ,elt))
+	 (assert (< -1 ,i (,(intern adjvfp) ,adjv)))
+	 (setf (aref (,(intern adjvv) ,adjv) ,i) ,elt))
+       (defsetf ,(intern adjvref) ,(intern setadjvref))
+       t)))
 
-(defmacro defdatastruct (name keytype valtype npointer) 
+
+
+
+(defmacro defdatastruct (name keytype valtype npointer init-key-elt init-val-elt)
   (let ((constr (gensym))
 	(namestr (princ-to-string name))
 	(errmsg (concatenate 'string (princ-to-string name) " constructor"))
@@ -10,6 +113,9 @@
 	(key (gensym "KEY"))
 	(val (gensym "VAL"))
 	(ptr (gensym "PTR"))
+	(keyarr (gensym "KEYARR"))
+	(valarr (gensym "VALARR"))
+	(ptrarr (gensym "PTRARR"))
 	(ptrargs (loop for k from 1 upto npointer collect (gensym "PTR")))
 	(i (gensym "I")))
     (flet ((fname (pre app)
@@ -19,36 +125,39 @@
 	   (accname (k)
 	     (intern (concatenate 'string namestr "-POINTER-" (princ-to-string k))))
 	   (setname (k)
-	     (intern (concatenate 'string "SET-" namestr "-POINTER-" (princ-to-string k))))
-	   (adjv (type)
-	     `(make-array 0 :adjustable t :fill-pointer t :element-type ',type)))
+	     (intern (concatenate 'string "SET-" namestr "-POINTER-" (princ-to-string k)))))
       `(progn 
 	 (defstruct (,name
 		      (:constructor ,constr))
-	   (keys     (error ,errmsg) :type vector)
-	   (values   (error ,errmsg) :type vector)
+	   (keys     (error ,errmsg) :type (simple-array ,keytype 1))
+	   (values   (error ,errmsg) :type (simple-array ,valtype 1))
 	   ,@(loop for k from 1 upto npointer
 		collect (list (intern (concatenate 'string 
 						   "POINTERS-"
 						   (princ-to-string k)))
 			      `(error ,errmsg)
 			      ':type
-			      'vector))
-	   (garbage  (error ,errmsg) :type vector)
-	   (header   (error ,errmsg) :type fixnum))
+			      '(simple-array fixnum 1)))
+	   (garbage  (error ,errmsg) :type (simple-array fixnum 1))
+	   (data-length 0 :type fixnum)
+	   (garbage-length 0 :type fixnum)
+	   (data-prev-alloc-counter 1 :type fixnum)
+	   (data-current-alloc-counter 1 :type fixnum)
+	   (garbage-prev-alloc-counter 1 :type fixnum)
+	   (garbage-current-alloc-counter 1 :type fixnum)
+	   (header -1 :type fixnum))
 	 (defun ,(fname "MAKE-" "") ()
 	   (,constr 
-	    :keys     ,(adjv keytype)
-	    :values   ,(adjv valtype)
+	    :keys     (make-array 1 :initial-element ,init-key-elt :element-type ',keytype)
+	    :values   (make-array 1 :initial-element ,init-val-elt :element-type ',valtype)
 	    ,@(mapcan #'copy-list
 		      (loop for k from 1 upto npointer
 			 collect (list (intern (concatenate 'string 
 							    "POINTERS-"
 							    (princ-to-string k))
 					       :keyword)
-				       (adjv 'fixnum))))
-	    :garbage  ,(adjv 'fixnum)
-	    :header   -1))
+				       '(make-array 1 :initial-element -1 :element-type 'fixnum))))
+	    :garbage  (make-array 1 :initial-element -1 :element-type 'fixnum)))
 	 (declaim (inline ,(fname "" "-VALUE")))
 	 (defun ,(fname "" "-VALUE") (,ds ,i)
 	   (aref ( ,(fname "" "-VALUES") ,ds) ,i))
@@ -73,44 +182,81 @@
 	      collect `(defun ,(setname k) (,ds ,i ,ptr)
 			 (setf (aref (,(slotname k) ,ds) ,i) ,ptr)))
 	 (defun ,(fname "ADD-IN-" "") (,ds ,key ,val ,@ptrargs)
-	   (if (zerop (fill-pointer ( ,(fname "" "-GARBAGE") ,ds)))
-	       (let ((,i (length (,(fname "" "-KEYS") ,ds))))
-		 (vector-push-extend ,key (,(fname "" "-KEYS") ,ds))
-		 (vector-push-extend ,val (,(fname "" "-VALUES") ,ds))
-		 ,@(loop for k from 0 below npointer 
-		      collect `(vector-push-extend ,(nth k ptrargs) 
-						   (,(slotname (+ k 1)) ,ds)))
+	   (if (zerop (,(fname "" "-GARBAGE-LENGTH") ,ds))
+	       (let ((,i (,(fname "" "-DATA-LENGTH") ,ds)))
+		 (if (<= (,(fname "" "-DATA-CURRENT-ALLOC-COUNTER") ,ds) ,i)
+		     (progn 
+		       (rotatef (,(fname "" "-DATA-CURRENT-ALLOC-COUNTER") ,ds)
+				(,(fname "" "-DATA-PREV-ALLOC-COUNTER") ,ds))
+		       (incf (,(fname "" "-DATA-CURRENT-ALLOC-COUNTER") ,ds)
+			     (,(fname "" "-DATA-PREV-ALLOC-COUNTER") ,ds))
+		       (let ((,keyarr (make-array (,(fname "" "-DATA-CURRENT-ALLOC-COUNTER") ,ds)
+						  :initial-element ,key :element-type ',keytype))
+			     (,valarr (make-array (,(fname "" "-DATA-CURRENT-ALLOC-COUNTER") ,ds)
+						  :initial-element ,val :element-type ',valtype)))
+			 (replace ,keyarr (,(fname "" "-KEYS") ,ds) :end2 ,i)
+			 (replace ,valarr (,(fname "" "-VALUES") ,ds) :end2 ,i)
+			 (setf (,(fname "" "-KEYS") ,ds) ,keyarr
+			       (,(fname "" "-VALUES") ,ds) ,valarr))
+		       ,@(loop for k from 0 below npointer 
+			    collect 
+			      `(let ((,ptrarr (make-array (,(fname "" "-DATA-CURRENT-ALLOC-COUNTER") ,ds)
+							  :initial-element ,(nth k ptrargs) :element-type 'fixnum)))
+				 (replace ,ptrarr (,(slotname (+ k 1)) ,ds) :end2 ,i)
+				 (setf (,(slotname (+ k 1)) ,ds) ,ptrarr))))
+		     (setf ,@(mapcan #'copy-list
+				     (loop for k from 0 below npointer 
+					collect (list `(aref (,(slotname (+ k 1)) ,ds) ,i)
+						      (nth k ptrargs))))
+			   (aref (,(fname "" "-KEYS") ,ds) ,i) ,key
+			   (aref (,(fname "" "-VALUES") ,ds) ,i) ,val))
+		 (incf (,(fname "" "-DATA-LENGTH") ,ds))
 		 ,i)
-	       (let ((,i (vector-pop (,(fname "" "-GARBAGE") ,ds))))
+	       (let ((,i (aref (,(fname "" "-GARBAGE") ,ds)
+			       (decf (,(fname "" "-GARBAGE-LENGTH") ,ds)))))
 		 (setf ,@(mapcan #'copy-list
-			  (loop for k from 0 below npointer 
-			     collect (list `(aref (,(slotname (+ k 1)) ,ds) ,i)
-					   (nth k ptrargs))))
+				 (loop for k from 0 below npointer 
+				    collect (list `(aref (,(slotname (+ k 1)) ,ds) ,i)
+						  (nth k ptrargs))))
 		       (aref (,(fname "" "-KEYS") ,ds) ,i) ,key
 		       (aref (,(fname "" "-VALUES") ,ds) ,i) ,val)
 		 ,i)))
 	 (declaim (inline ,(fname "REMOVE-IN-" "")))
 	 (defun ,(fname "REMOVE-IN-" "") (,ds ,i)
-	   (vector-push-extend ,i (,(fname "" "-GARBAGE") ,ds))
-	   ,i)
+	   (cond ((<= (,(fname "" "-DATA-LENGTH") ,ds) ,i)
+		  -1)
+		 ((<= (,(fname "" "-GARBAGE-CURRENT-ALLOC-COUNTER") ,ds)
+		   (,(fname "" "-GARBAGE-LENGTH") ,ds))
+		  (rotatef (,(fname "" "-GARBAGE-CURRENT-ALLOC-COUNTER") ,ds)
+			   (,(fname "" "-GARBAGE-PREV-ALLOC-COUNTER") ,ds))
+		  (incf (,(fname "" "-GARBAGE-CURRENT-ALLOC-COUNTER") ,ds)
+			(,(fname "" "-GARBAGE-PREV-ALLOC-COUNTER") ,ds))
+		  (let ((,ptrarr (make-array (,(fname "" "-GARBAGE-CURRENT-ALLOC-COUNTER") ,ds)
+					     :initial-element ,i :element-type 'fixnum)))
+		    (replace ,ptrarr (,(fname "" "-GARBAGE") ,ds) 
+			     :end2 (,(fname "" "-GARBAGE-LENGTH") ,ds))
+		    (setf (,(fname "" "-GARBAGE") ,ds) ,ptrarr))
+		  (incf (,(fname "" "-GARBAGE-LENGTH") ,ds))
+		  ,i)
+		 (t 
+		  (setf (aref (,(fname "" "-GARBAGE") ,ds) 
+			      (,(fname "" "-GARBAGE-LENGTH") ,ds)) ,i)
+		  (incf (,(fname "" "-GARBAGE-LENGTH") ,ds))
+		  ,i)))
 	 (declaim (inline ,(fname "" "-COUNT")))
 	 (defun ,(fname "" "-COUNT") (,ds)
-	   (- (fill-pointer (,(fname "" "-KEYS") ,ds))
-	      (fill-pointer (,(fname "" "-GARBAGE") ,ds))))
+	   (- (,(fname "" "-DATA-LENGTH") ,ds)
+	      (,(fname "" "-GARBAGE-LENGTH") ,ds)))
 	 (declaim (inline ,(fname "RESET-" "")))
 	 (defun ,(fname "RESET-" "") (,ds)
-	   (setf (fill-pointer (,(fname "" "-KEYS") ,ds)) 0
-		 (fill-pointer (,(fname "" "-VALUES") ,ds)) 0
-		 (fill-pointer (,(fname "" "-GARBAGE") ,ds)) 0
-		 (,(fname "" "-HEADER") ,ds) -1)
-		 ,@(loop for k from 1 upto npointer
-		      collect `(setf (fill-pointer (,(slotname k) ,ds)) 0)))  
+	   (setf (,(fname "" "-GARBAGE-LENGTH") ,ds) 0
+		 (,(fname "" "-DATA-LENGTH") ,ds) 0
+		 (,(fname "" "-HEADER") ,ds) -1))
 	 (defsetf ,(fname "" "-VALUE") ,(fname "SET-" "-VALUE"))
 	 (defsetf ,(fname "" "-KEY") ,(fname "SET-" "-KEY"))
 	 ,@(loop for k from 1 upto npointer
 	      collect `(defsetf ,(accname k) ,(setname k)))
 	 t))))
-
 
 
 ;;;;; Helper macros
@@ -198,7 +344,7 @@
 
 ;;;; A few common data structures
 
-(defmacro stack (&key (name "") (key-type 'fixnum) (val-type 'fixnum))
+(defmacro stack (&key (name "") (key-type 'fixnum) (val-type 'fixnum) (init-key-el 0) (init-val-el 0))
   (let ((namestr (if (string= "" name)
 		     (concatenate 'string
 				  "STACK-"
@@ -215,7 +361,7 @@
     (flet ((fname (pre app)
 	     (intern (concatenate 'string pre namestr app))))
     `(progn
-       (defdatastruct ,(intern namestr) ,key-type ,val-type 0)
+       (defdatastruct ,(intern namestr) ,key-type ,val-type 0 ,init-key-el ,init-val-el)
        (defun ,(fname "" "-PUSH") (,s ,key ,val)
 	 (setf (,(fname "" "-HEADER") ,s) 
 	       (,(fname "ADD-IN-" "") ,s ,key ,val)))
@@ -238,7 +384,7 @@
 
 
 
-(defmacro single-linked-list (&key (name "") (key-type 'fixnum) (val-type 'fixnum) (key-equal 'eql) (val-equal 'eql))
+(defmacro single-linked-list (&key (name "") (key-type 'fixnum) (val-type 'fixnum) (key-equal 'eql) (val-equal 'eql) (init-key-el 0) (init-val-el 0))
   (let ((namestr (if (string= "" name)
 		     (concatenate 'string
 				  "SINGLE-LINKED-LIST-"
@@ -258,7 +404,7 @@
     (flet ((fname (pre app)
 	     (intern (concatenate 'string pre namestr app))))
     `(progn
-       (defdatastruct ,(intern namestr) ,key-type ,val-type 1)
+       (defdatastruct ,(intern namestr) ,key-type ,val-type 1 ,init-key-el ,init-val-el)
        (defun ,(fname "" "-PUSH") (,ll ,key ,val)
 	 (let ((,ptr (,(fname "" "-HEADER") ,ll)))
 	   (setf (,(fname "" "-HEADER") ,ll) 
@@ -316,7 +462,7 @@
 
 
 
-(defmacro binary-tree (&key (name "") (key-type 'fixnum) (val-type 'fixnum) (key-equal 'eql) (key-increasing '<))
+(defmacro binary-tree (&key (name "") (key-type 'fixnum) (val-type 'fixnum) (key-equal 'eql) (key-increasing '<) (init-key-el 0) (init-val-el 0))
   (let ((namestr (if (string= "" name)
 		     (concatenate 'string
 				  "BINARY-TREE-"
@@ -338,7 +484,7 @@
     (flet ((fname (pre app)
 	     (intern (concatenate 'string pre namestr app))))
     `(progn
-       (defdatastruct ,(intern namestr) ,key-type ,val-type 2)
+       (defdatastruct ,(intern namestr) ,key-type ,val-type 2 ,init-key-el ,init-val-el)
        (defun ,(fname "" "-FIND-KEY") (,bt ,key &optional (,i -1))
 	 (when (= -1 ,i)
 	   (setf ,i (,(fname "" "-HEADER") ,bt)))
@@ -401,7 +547,7 @@
 
 
 
-(defmacro threaded-binary-tree (&key (name "") (key-type 'fixnum) (val-type 'fixnum) (key-equal 'eql) (key-increasing '<))
+(defmacro threaded-binary-tree (&key (name "") (key-type 'fixnum) (val-type 'fixnum) (key-equal 'eql) (key-increasing '<) (init-key-el 0) (init-val-el 0))
   (let ((namestr (if (string= "" name)
 		     (concatenate 'string
 				  "THREADED-BINARY-TREE-"
@@ -424,7 +570,7 @@
 	     (intern (concatenate 'string pre namestr app))))
     `(progn
        (binary-tree :name ,namestr :key-type ,key-type :val-type ,val-type :key-equal ,key-equal :key-increasing ,key-increasing)
-       (defdatastruct ,(intern namestr) ,key-type ,val-type 4)
+       (defdatastruct ,(intern namestr) ,key-type ,val-type 4 ,init-key-el ,init-val-el)
        (defun ,(fname "" "-INSERT") (,bt ,key ,val &optional (,i -1))
 	 (when (= -1 ,i)
 	   (setf ,i (,(fname "" "-HEADER") ,bt)))
@@ -463,7 +609,7 @@
 
 
 
-(defmacro splay-tree (&key (name "") (key-type 'fixnum) (val-type 'fixnum) (key-equal 'eql) (key-increasing '<))
+(defmacro splay-tree (&key (name "") (key-type 'fixnum) (val-type 'fixnum) (key-equal 'eql) (key-increasing '<) (init-key-el 0) (init-val-el 0))
   (let ((namestr (if (string= "" name)
 		     (concatenate 'string
 				  "SPLAY-TREE-"
@@ -490,8 +636,7 @@
     (flet ((fname (pre app)
 	     (intern (concatenate 'string pre namestr app))))
     `(progn
-       (binary-tree :name ,namestr :key-type ,key-type :val-type ,val-type :key-equal ,key-equal :key-increasing ,key-increasing)
-       ;(defdatastruct ,(intern namestr) ,key-type ,val-type 2)
+       (binary-tree :name ,namestr :key-type ,key-type :val-type ,val-type :key-equal ,key-equal :key-increasing ,key-increasing :init-key-el ,init-key-el :init-val-el ,init-val-el)
        (defun ,(fname "" "-SPLAY") (,st ,key)
 	 (if (= -1 (,(fname "" "-HEADER") ,st))
 	     (values -1 nil)
