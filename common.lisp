@@ -11,6 +11,7 @@
 (define-modify-macro minf (value) min)
 (define-modify-macro mulf (value) *)
 (define-modify-macro divf (value) /)
+(define-modify-macro ashf (value) ash)
 
 (defmacro orf (place &rest rest)
   `(setf ,place (or ,@rest ,place)))
@@ -66,3 +67,26 @@
 		  (setf (aref adjvector r) temp))
 		(decf r)
 		(incf l)))))))
+
+
+(defun floor-log2 (n)
+  (let ((p 0))
+    (unless (< n 65536)
+      (ashf n -16)
+      (incf p 16))
+    (unless (< n 256)
+      (ashf n -8)
+      (incf p 8))
+    (unless (< n 16)
+      (ashf n -4)
+      (incf p 4))
+    (unless (< n 4)
+      (ashf n -2)
+      (incf p 2))
+    (unless (< n 2)
+      (ashf n -1)
+      (incf p))
+    (if (zerop n)
+	-1
+	p)))
+   
