@@ -2,8 +2,11 @@
 
 ;;;;; Front-end of the rational simplex solver:
 ;;;;; * create new LP instance with lp-make-new
+;;;;; * create new LP instance from file with lp-load-from-mps
 ;;;;; * add new column with lp-add-variable
 ;;;;; * add new row with lp-add-constraint
+;;;;; * solve with lp-solve
+;;;;; * profile the solver with rational-simplex-profiling
 ;;;;;
 
 

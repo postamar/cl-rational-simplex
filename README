@@ -1,0 +1,15 @@
+Quick solver instructions:
+--------------------------
+
+1. Create LP object instance
+- either enerate new LP object instance with lp-make-new,
+- or load from MPS file with lp-load-from-mps
+
+2. Modify
+- add new variable with lp-add-variable
+- add new constraint with lp-add-constraint
+
+3. Solve
+- run lp-solve
+
+Function arguments and return values are more extensively described in doc strings.
