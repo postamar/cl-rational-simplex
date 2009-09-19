@@ -46,26 +46,52 @@
 	(k2 (gensym))
 	(i1 (gensym))
 	(i2 (gensym))
+	(n1 (gensym))
+	(n2 (gensym))
 	(pivot-i (gensym)))
     `(let ((,k2 1)
+	   (,k1 0)
+	   (,n1 (length ,v-inds))
+	   (,n2 (length ,eta-inds))
+	   (,i1 -1)
+	   (,i2 -1)
 	   (,pivot-i (aref ,eta-inds 0)))
-       (dotimes (,k1 (length ,v-inds))
-	 (let ((,i1 (aref ,v-inds ,k1)))
-	   (if (= ,k2 (length ,eta-inds))
-	       (if (= ,i1 ,pivot-i)
-		   (funcall ,pivot-fun ,k1)
-		   (funcall ,scale-fun ,k1))
-	       (let ((,i2 (aref ,eta-inds ,k2)))
-		 (cond ((= ,i1 ,pivot-i)
-			(funcall ,pivot-fun ,k1))
-		       ((= ,i1 ,i2)
-			(funcall ,other-fun ,k1 ,k2)
-			(incf ,k2))
-		       ((< ,i1 ,i2)
-			(funcall ,scale-fun ,k1))
-		       ((> ,i1 ,i2)
-			(incf ,k2))))))))))
-
+       (unless (= 0 ,n1)
+	 (setf ,i1 (aref ,v-inds 0))
+	 (when (or (= 1 ,n2)
+		   (progn 
+		     (setf ,i2 (aref ,eta-inds 1))
+		     (loop
+			(cond
+			  ((= ,i1 ,pivot-i)
+			   (funcall ,pivot-fun ,k1)
+			   (if (= ,n1 (incf ,k1))
+			       (return nil)
+			       (setf ,i1 (aref ,v-inds ,k1))))
+			  ((= ,i1 ,i2)
+			   (funcall ,other-fun ,k1 ,k2)
+			   (if (= ,n1 (incf ,k1))
+			       (return nil)
+			       (setf ,i1 (aref ,v-inds ,k1)))
+			   (if (= ,n2 (incf ,k2))
+			       (return t)
+			       (setf ,i2 (aref ,eta-inds ,k2))))
+			  ((< ,i1 ,i2)
+			 (funcall ,scale-fun ,k1)
+			   (if (= ,n1 (incf ,k1))
+			       (return nil)
+			       (setf ,i1 (aref ,v-inds ,k1))))
+			  ((> ,i1 ,i2)
+			   (if (= ,n2 (incf ,k2))
+			       (return t)
+			       (setf ,i2 (aref ,eta-inds ,k2))))))))
+	   (loop 
+	      (if (= (aref ,v-inds ,k1) ,pivot-i)
+		     (funcall ,pivot-fun ,k1)
+		     (funcall ,scale-fun ,k1))
+	      (when (= ,n1 (incf ,k1)) 
+		(return))))))))
+	   
 
 ;;;;; TRAN functions
 
@@ -125,23 +151,27 @@
 ;;;;
 (defun btran-u-non-zero (tr)
   (let* ((bm (tran-bm tr))
+	 (m (basis-matrix-size bm))
 	 (hsv-nz (tran-non-zeros tr)))
-    (dotimes (k (length (basis-matrix-u-file bm)))
+    (dotimes (k m)
       (let ((u (aref (basis-matrix-u-file bm) k)))
-	(when (is-btran-residual-non-zero tr (lu-eta-matrix-is u))
-	  (setf (bit (tran-u-file tr) k) 1)
-	  (let ((pivot-i (aref (lu-eta-matrix-is u) 0)))
-	    (unless (is-hsv-component-non-zero hsv-nz pivot-i)
-	      (hyper-sparse-vector-set hsv-nz pivot-i 0))))))))
+	(if (is-btran-residual-non-zero tr (lu-eta-matrix-is u))
+	    (progn 
+	      (setf (bit (tran-u-file tr) k) 1)
+	      (unless (is-hsv-component-non-zero hsv-nz k)
+		(hyper-sparse-vector-set hsv-nz k 0)))
+	    (when (is-hsv-component-non-zero hsv-nz k)
+	      (setf (bit (tran-u-file tr) k) 1)))))))
+
 
 
 ;;;; 
 (defun btran-l-u-non-zero (tr)
   (let* ((bm (tran-bm tr))
 	 (hsv-nz (tran-non-zeros tr)))
-    (loop for k from (- (basis-matrix-size bm) 1) downto 0
-       do (let* ((l (aref (basis-matrix-l-columns bm) k))
-		 (pivot-i (aref (lu-eta-matrix-is l) 0)))
+    (loop for k from (- (basis-matrix-n-l-file bm) 1) downto 0
+       do (let* ((l (aref (basis-matrix-l-file bm) k))
+		 (pivot-i (lu-eta-matrix-j l)))
 	    (if (is-hsv-component-non-zero hsv-nz pivot-i)
 		(setf (bit (tran-l-file tr) k) 1)
 		(when (is-btran-residual-non-zero tr (lu-eta-matrix-is l))
@@ -151,20 +181,20 @@
 
 
 (defun btran-solve-eta (tr eta)
-  (let ((residue 0))
+  (let ((residue 0)
+	(new-d-fact (* (aref (lu-eta-matrix-vis eta) 0)
+		       (numerator (lu-eta-matrix-coef eta)))))
     ;; compute residue
     (do-hsv 
-	#'identity 
+	#'identity
 	#'(lambda (result-k eta-k)
 	    (incf residue (* (aref (lu-eta-matrix-vis eta) eta-k)
 			     (aref (tran-values tr) result-k))))
 	#'identity
 	(tran-indices tr)
 	(lu-eta-matrix-is eta))
-    ;(format t "residue = ~A~%" residue)
     ;; update coef
-    (divf (tran-coef tr) (* (aref (lu-eta-matrix-vis eta) 0)
-			    (numerator (lu-eta-matrix-coef eta))))
+    (divf (tran-coef tr) new-d-fact)
     ;; update result values
     (do-hsv
 	#'(lambda (result-pivot-k)
@@ -175,13 +205,9 @@
 			residue))))
       #'(lambda (result-k eta-k)
 	  (declare (ignore eta-k))
-	  (mulf (aref (tran-values tr) result-k)
-		(* (aref (lu-eta-matrix-vis eta) 0)
-		(numerator (lu-eta-matrix-coef eta)))))
+	  (mulf (aref (tran-values tr) result-k) new-d-fact))
       #'(lambda (result-k)
-	  (mulf (aref (tran-values tr) result-k)
-		(* (aref (lu-eta-matrix-vis eta) 0)
-		(numerator (lu-eta-matrix-coef eta)))))
+	  (mulf (aref (tran-values tr) result-k) new-d-fact))
       (tran-indices tr)
       (lu-eta-matrix-is eta))))
 	     
@@ -222,8 +248,9 @@
 
 ;;;;
 (defun btran-u-fill-in (tr)
-  (let ((bm (tran-bm tr)))
-    (dotimes (k (length (basis-matrix-u-file bm)))
+  (let* ((bm (tran-bm tr))
+	 (m (basis-matrix-size bm)))
+    (dotimes (k m)
       (unless (zerop (bit (tran-u-file tr) k))
 	(btran-solve-eta tr (aref (basis-matrix-u-file bm) k))))))
 
@@ -231,14 +258,14 @@
 ;;;;
 (defun btran-l-u-fill-in (tr)
   (let ((bm (tran-bm tr)))
-    (loop for k from (- (basis-matrix-size bm) 1) downto 0
+    (loop for k from (- (basis-matrix-n-l-file bm) 1) downto 0
        do (unless (zerop (bit (tran-l-file tr) k))
-	    (btran-multiply-eta tr (aref (basis-matrix-l-columns bm) k))))))
+	    (btran-multiply-eta tr (aref (basis-matrix-l-file bm) k))))))
 
-	
 
 ;;;;
 (defun btran-u (tr perm-row perm-col inv-perm-row inv-perm-col coef indices values)
+  (declare (ignore perm-row inv-perm-col))
   (tran-prepare-non-zero tr)
   (let* ((init-n-nz (length indices))
 	 (hsv-nz (tran-non-zeros tr)))
@@ -251,7 +278,7 @@
   (btran-u-non-zero tr)
   (tran-prepare-fill-in tr)
   (btran-u-fill-in tr)
-  (tran-permutation tr inv-perm-row)
+  (tran-permutation tr inv-perm-row) ;; for sure
   (in-place-sort-keys-increasing (tran-indices tr) (tran-values tr)))
 
 
@@ -302,20 +329,25 @@
 	(incf (aref vt j)
 	      (* (aref vr i)
 		 (aref du i j)))))
+#|
    (print vr)
    (print du)
    (print vt)
    (print vs)
    (print '---)
-    (dotimes (i m t)
+|#  
+  (dotimes (i m t)
       (assert (= (aref vt i) (aref vs i))))))
 
 
 ;;;;
 (defun btran (tr perm-row perm-col inv-perm-row inv-perm-col coef indices values)
   (btran-u tr perm-row perm-col inv-perm-row inv-perm-col coef indices values)
-;  (check-btran-u tr inv-perm-row inv-perm-col coef indices values)
+  ;(check-btran-u tr inv-perm-row inv-perm-col coef indices values)
   (btran-l-u tr (tran-coef tr) (tran-indices tr) (tran-values tr)))
+
+
+
 
 
 ;;;;; FTRAN functions	  
@@ -359,12 +391,11 @@
 ;;;;
 (defun ftran-l-u-non-zero (tr)
   (let* ((bm (tran-bm tr))
-	 (m (basis-matrix-size bm))
 	 (hsv-nz (tran-non-zeros tr)))
     ;; go through PL-file
-    (dotimes (k m)
-      (let* ((l (aref (basis-matrix-l-columns bm) k))
-	     (pivot-i (aref (lu-eta-matrix-is l) 0)))
+    (dotimes (k (basis-matrix-n-l-file bm))
+      (let* ((l (aref (basis-matrix-l-file bm) k))
+	     (pivot-i (lu-eta-matrix-j l)))
 	(when (is-hsv-component-non-zero hsv-nz pivot-i)
 	  (find-ftran-non-zeros tr (lu-eta-matrix-is l))
 	  (setf (bit (tran-l-file tr) k) 1))))))
@@ -374,10 +405,11 @@
 ;;;;
 (defun ftran-u-non-zero (tr)
   (let* ((bm (tran-bm tr))
+	 (m (basis-matrix-size bm))
 	 (hsv-nz (tran-non-zeros tr)))
-    (loop for k from (- (length (basis-matrix-u-file bm)) 1) downto 0
+    (loop for k from (- m 1) downto 0
        do (let* ((u (aref (basis-matrix-u-file bm) k))
-		 (pivot-i (aref (lu-eta-matrix-is u) 0)))
+		 (pivot-i k))
 	    (when (is-hsv-component-non-zero hsv-nz pivot-i)
 	      (find-ftran-non-zeros tr (lu-eta-matrix-is u))
 	      (setf (bit (tran-u-file tr) k) 1))))))
@@ -447,22 +479,24 @@
 ;;;;
 (defun ftran-l-u-fill-in (tr)
   (let ((bm (tran-bm tr)))
-    (loop for k from (- (basis-matrix-size bm) 1) downto 0
-       do (unless (zerop (bit (tran-l-file tr) k))
-	    (ftran-multiply-eta tr (aref (basis-matrix-l-columns bm) k))))))
+    (dotimes (k (basis-matrix-n-l-file bm))
+      do (unless (zerop (bit (tran-l-file tr) k))
+	   (ftran-multiply-eta tr (aref (basis-matrix-l-file bm) k))))))
 
 
 ;;;;
 (defun ftran-u-fill-in (tr)
-  (let ((bm (tran-bm tr)))
-    (dotimes (k (length (basis-matrix-u-file bm)))
-      (unless (zerop (bit (tran-u-file tr) k))
-	(ftran-solve-eta tr (aref (basis-matrix-u-file bm) k))))))
+  (let* ((bm (tran-bm tr))
+	 (m (basis-matrix-size bm)))
+    (loop for k from (- m 1) downto 0
+       do (unless (zerop (bit (tran-u-file tr) k))
+	    (ftran-solve-eta tr (aref (basis-matrix-u-file bm) k))))))
 
 
 
 ;;;;
 (defun ftran-u (tr perm-row perm-col inv-perm-row inv-perm-col coef indices values)
+  (declare (ignore perm-col inv-perm-row))
   (tran-prepare-non-zero tr)
   (let* ((init-n-nz (length indices))
 	 (hsv-nz (tran-non-zeros tr)))
@@ -475,7 +509,7 @@
   (ftran-u-non-zero tr)
   (tran-prepare-fill-in tr)
   (ftran-u-fill-in tr)
-  (tran-permutation tr perm-col)
+  (tran-permutation tr inv-perm-col)
   (in-place-sort-keys-increasing (tran-indices tr) (tran-values tr)))
   
 
@@ -497,7 +531,49 @@
 
 
 
+
+(defun check-ftran-u (tr inv-perm-row inv-perm-col coef indices values)
+  (let* ((bm (tran-bm tr))
+	 (m (basis-matrix-size bm))
+	 (du (make-array (list m m) :initial-element 0 :element-type 'rational))
+	 (vs (make-nvector m 0 rational))
+	 (vr (make-nvector m 0 rational))
+	 (vt (make-nvector m 0 rational)))
+    ;; make dense u
+    (dotimes (k m)
+      (setf (aref du (aref inv-perm-row k) (aref inv-perm-col k)) 1))
+    (dotimes (k (length (basis-matrix-u-columns bm)))
+      (let* ((u (aref (basis-matrix-u-columns bm) k))
+	     (uj (lu-eta-matrix-j u)))
+	(dotimes (l (length (lu-eta-matrix-is u)))
+	  (when (zerop l)
+	    (assert (= 1 (aref du (aref (lu-eta-matrix-is u) 0) uj))))
+	  (setf (aref du (aref (lu-eta-matrix-is u) l) uj)
+		(* (lu-eta-matrix-coef u) (aref (lu-eta-matrix-vis u) l))))))
+    ;; make dense vectors
+    (dotimes (k (length indices))
+      (let ((i (aref indices k)))
+	(setf (aref vs i) (* coef (aref values k)))))
+    (dotimes (k (length (tran-indices tr)))
+      (setf (aref vr (aref (tran-indices tr) k))
+	    (* (tran-coef tr) (aref (tran-values tr) k))))
+    (dotimes (i m)
+      (dotimes (k m)
+	(incf (aref vt i)
+	      (* (aref vr k)
+		 (aref du i k)))))
+    (print (list (tran-coef tr) (tran-indices tr) (tran-values tr)))
+   (print vr)
+   (print du)
+   (print vt)
+   (print vs)
+   (print '---)
+    (dotimes (i m t)
+      (assert (= (aref vt i) (aref vs i))))))
+
+
 ;;;;
 (defun ftran (tr perm-row perm-col inv-perm-row inv-perm-col coef indices values)
   (ftran-l-u tr coef indices values)
-  (ftran-u tr perm-row perm-col inv-perm-row inv-perm-col (tran-coef tr) (tran-indices tr) (tran-values tr)))
+  (ftran-u tr perm-row perm-col inv-perm-row inv-perm-col 
+	   (tran-coef tr) (tran-indices tr) (tran-values tr)))

@@ -55,7 +55,7 @@
 	 (row (aref (lp-rows lp) row-ref))
 	 (slack-col (aref (lp-columns lp) (row-slack-col-ref row)))
 	 (slack-col-coef (aref (column-values slack-col) 0))
-	 (b (column-l slack-col))
+	 (b (clumn-l slack-col))
 	 (a (rational-in-column col (aref (row-col-indices row) 0))))
     (if (= -1 slack-col-coef)
 	(update-column-upper-bound lp col (/ b a))

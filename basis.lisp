@@ -90,6 +90,7 @@
     ;; return basis instance
     (let ((matrix (make-basis-matrix :lp lp)))
       (fill-basis-matrix matrix lp header)
+      (basis-matrix-lu-decomposition matrix)
       (%make-basis
        :matrix matrix
        :header header

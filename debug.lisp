@@ -1,10 +1,9 @@
 
-(defun make-dense-basis (lp b)
-  (let* ((bm (basis-matrix b))
-	 (m (basis-matrix-size bm))
+(defun make-dense-basis (lp bm bh)
+  (let* ((m (basis-matrix-size bm))
 	 (db (make-array (list m m) :initial-element 0 :element-type 'rational)))
     (dotimes (k m db)
-      (let* ((col-ref (aref (basis-header b) k))
+      (let* ((col-ref (aref bh k))
 	     (col (aref (lp-columns lp) col-ref)))
 	(dotimes (l (length (column-row-refs col)))
 	  (let* ((row-ref (aref (column-row-refs col) l))
@@ -16,19 +15,13 @@
 
 
 ;;;; Verifies the LU decomposition
-(defun lu-check (lp b)
-  (let* ((bm (basis-matrix b))
-	 (m (basis-matrix-size bm))
+(defun lu-check (lp bm bh)
+  (let* ((m (basis-matrix-size bm))
 	 (ua (make-array (list m m) :initial-element 0 :element-type 'rational))
-	 (lc (make-array m :initial-element 0 :element-type 'rational))
+	 (la (make-array (list m m) :initial-element 0 :element-type 'rational))
 	 (ta (make-array (list m m) :initial-element 0 :element-type 'rational))
-	 (da (make-dense-basis lp b)))
+	 (da (make-dense-basis lp bm bh)))
     ;; fill u
-    (dotimes (k m)
-      (let* ((l (aref (basis-matrix-l-columns bm) k))
-	     (pivj (lu-eta-matrix-j l))
-	     (pivi (aref (lu-eta-matrix-is l) 0)))
-	(setf (aref ua pivi pivj) 1)))
     (dotimes (index (length (basis-matrix-u-columns bm)))
       (let* ((u (aref (basis-matrix-u-columns bm) index))
 	     (j (lu-eta-matrix-j u)))
@@ -37,14 +30,15 @@
 	    (setf (aref ua i j)
 		  (* (lu-eta-matrix-coef u) (aref (lu-eta-matrix-vis u) r)))))))
     ;; compute
-    (dotimes (k m)
+    (dotimes (k (basis-matrix-n-l-file bm))
       ;; reset l
-      (let* ((l (aref (basis-matrix-l-columns bm) k))
+      (let* ((l (aref (basis-matrix-l-file bm) k))
 	     (lj (lu-eta-matrix-j l)))
 	(dotimes (i m)
-	  (setf (aref lc i) 0))
+	  (dotimes (j m)
+	    (setf (aref la i j) (if (and (= i j) (/= j lj)) 1 0))))
 	(dotimes (kl (length (lu-eta-matrix-is l)))
-	  (setf (aref la (aref (lu-eta-matrix-is l) kl))
+	  (setf (aref la (aref (lu-eta-matrix-is l) kl) lj)
 		(* (lu-eta-matrix-coef l) (aref (lu-eta-matrix-vis l) kl)))))
       ;; matrix multiplication
       (dotimes (i m)
@@ -58,17 +52,36 @@
 	(dotimes (j m)
 	  (setf (aref da i j) (aref ta i j)))))
     ;; check
-    (print-2d-array da)
-    (print-2d-array ua)
+    (dotimes (i m)
+      (dotimes (j m)
+	(assert (= (aref da i j) (aref ua i j)))))
+    ;; check u permutation
+    (dotimes (i m)
+      (dotimes (j m)
+	(setf (aref ta i j) 0)))
+    (dotimes (j m)
+      (let ((us (aref (basis-matrix-u-file bm) j)))
+	(dotimes (k (length (lu-eta-matrix-is us)))
+	  (setf (aref ta (aref (lu-eta-matrix-is us) k) j)
+		(* (lu-eta-matrix-coef us) (aref (lu-eta-matrix-vis us) k))))))
+    (dotimes (i m)
+      (dotimes (j m)
+	(setf (aref da (aref (basis-matrix-pi->i bm) i) (aref (basis-matrix-pj->j bm) j))
+	      (aref ta i j))))
+    ;; check
     (dotimes (i m)
       (dotimes (j m)
 	(assert (= (aref da i j) (aref ua i j)))))))
+    
+		    
+    
 
 
 
 ;;;;
 (defun check-btran (sd)
-  (let* ((db (make-dense-basis (simplex-lp sd) (simplex-basis sd)))
+  (let* ((db (make-dense-basis (simplex-lp sd) (basis-matrix (simplex-basis sd))
+			       (basis-header (simplex-basis sd))))
 	 (tr (simplex-tran sd))
 	 (m (basis-matrix-size (basis-matrix (simplex-basis sd))))
 	 (vs (make-nvector m 0 rational))
@@ -86,18 +99,20 @@
 	(incf (aref vt j)
 	      (* (aref vr i)
 		 (aref db i j)))))
-  ;  (print (basis-header (simplex-basis sd)))
- ;  (print vr)
- ;  (print db)
- ;  (print vt)
- ;  (print vs)
- ;  (print '---)
-    (dotimes (i m t)
+ ;   (print (basis-header (simplex-basis sd)))
+#|
+   (print vr)
+   (print db)
+   (print vt)
+   (print vs)
+   (print '---)
+|#    (dotimes (i m t)
       (assert (= (aref vt i) (aref vs i))))))
   
 
 (defun check-ftran (sd)
-  (let* ((db (make-dense-basis (simplex-lp sd) (simplex-basis sd)))
+  (let* ((db (make-dense-basis (simplex-lp sd) (basis-matrix (simplex-basis sd))
+			       (basis-header (simplex-basis sd))))
 	 (tr (simplex-tran sd))
 	 (m (basis-matrix-size (basis-matrix (simplex-basis sd))))
 	 (vs (make-nvector m 0 rational))
@@ -115,11 +130,167 @@
 	(incf (aref vt i)
 	      (* (aref vr j)
 		 (aref db i j)))))
-  ;  (print (list vr db vt vs))
+;    (print (list vr db vt vs))
     (dotimes (i m t)
       (assert (= (aref vt i) (aref vs i))))))
 
 
 
 
+
+(defun print-u-file (bm)
+  (let* ((m (basis-matrix-size bm))
+	 (ua (make-array (list m m) :initial-element 0 :element-type 'rational)))
+    (dotimes (j m) 
+      (let ((u (aref (basis-matrix-u-file bm) j)))
+	(dotimes (k (length (lu-eta-matrix-is u)))
+	  (setf (aref ua (aref (lu-eta-matrix-is u) k) j)
+		(* (lu-eta-matrix-coef u) (aref (lu-eta-matrix-vis u) k))))))
+    (print ua)
+    t))
+
+
+(defun check-dual-feasability (sd)
+  (let* ((b (simplex-basis sd))
+	 (rcosts (basis-reduced-costs b))
+	 (flags (basis-column-flags b)))
+    (assert (= (length rcosts) (length flags)))
+    (let ((test 
+	   (dotimes (j (length flags) t)
+	     (let ((flag (aref flags j))
+		   (d (aref rcosts j)))
+	       (when (eq flag 'nonbasic-lower-bound)
+		 (unless (<= 0 d)
+		   (print flag)
+		   (print d)
+		   (return nil)))
+	       (when (eq flag 'nonbasic-upper-bound)
+		 (unless (<= d 0)
+		   (print flag)
+		   (print d)
+		   (return nil)))))))
+      (unless test
+	(error "current basis not dual feasible")))))
+
+	
+(defun check-primal-feasability (sd)
+  (let* ((b (simplex-basis sd))
+	 (bh (basis-header b))
+	 (lp (simplex-lp sd)))
+    (check-primal-values sd)
+    (dotimes (k (length bh))
+      (let* ((col (aref (lp-columns lp) (aref bh k)))
+	     (xk (aref (basis-primal-values b) k)))
+	(when (column-has-l col)
+	  (assert (<= (column-l col) xk)))
+	(when (column-has-u col)
+	  (assert (<= xk (column-u col))))))))
+
+
+
+(defun check-primal-values (sd)
+  (let* ((b (simplex-basis sd))
+	 (bh (basis-header b))
+	 (lp (simplex-lp sd))
+	 (x (make-nvector (length (lp-columns lp)) 0 rational)))
+    ;; fill x
+    (dotimes (k (length bh))
+      (let* ((col (aref (lp-columns lp) (aref bh k)))
+	     (xk (aref (basis-primal-values b) k)))
+	(setf (aref x (column-ref col)) xk)))
+    (dotimes (j (length (lp-columns lp)))
+      (let ((col (aref (lp-columns lp) j))
+	    (flag (aref (basis-column-flags b) j)))
+	(cond ((eq flag 'basic))
+	      ((eq flag 'nonbasic-lower-bound)
+	       (assert (column-has-l col))
+	       (setf (aref x j) (column-l col)))
+	      ((eq flag 'nonbasic-upper-bound)
+	       (assert (column-has-u col))
+	       (setf (aref x j) (column-u col)))
+	      (t
+	       (error "not in phase 2? ~A" flag)))))
+    ;; check if rows add up
+    (dotimes (row-ref (length (lp-rows lp)))
+      (let* ((row (aref (lp-rows lp) row-ref))
+	     (total 0))
+	(when (row-is-active row)
+	  (assert (= (length (row-col-refs row)) (length (row-col-indices row))))
+	  (dotimes (k (length (row-col-refs row)))
+	    (let* ((j (aref (row-col-refs row) k))
+		   (col (aref (lp-columns lp) j))
+		   (aij (rational-in-column col (aref (row-col-indices row) k))))
+	      (incf total (* aij (aref x j)))))
+	  (unless (zerop total)
+	    (print total)
+	    (print x)
+	    (print row)))
+	(assert (zerop total))))))
+
+	 
+(defun check-reduced-costs (sd)
+  (let ((orig-rcosts (copy-seq (basis-reduced-costs (simplex-basis sd))))
+	(orig-prow (copy-seq (simplex-pivot-row sd))))
+    ;; get multipliers
+    (simplex-compute-reduced-costs sd)
+    (let ((test 
+	   (dotimes (j (length orig-rcosts) t)
+	     (let ((flag (aref (basis-column-flags (simplex-basis sd)) j)))
+	       (when (or (eq flag 'nonbasic-lower-bound)
+			 (eq flag 'nonbasic-upper-bound))
+		 (unless (= (aref orig-rcosts j)
+			    (aref (basis-reduced-costs (simplex-basis sd)) j))
+		   (return nil)))))))
+      (unless test
+	(print '-)
+	(print (simplex-ratio-d sd))
+	(print orig-prow)
+	(print orig-rcosts)
+	(print '--should-be)
+	(print (basis-reduced-costs (simplex-basis sd)))
+	(error "reduced costs")))))
+
+
+(defun check-primal-update-phase2 (sd)
+  (let ((orig-primal (copy-seq (basis-primal-values (simplex-basis sd)))))
+    ;; get multipliers
+    (simplex-compute-primal-values sd)
+    (let ((test 
+	   (dotimes (k (length orig-primal) t)
+	     (unless (= (aref orig-primal k)
+			(aref (basis-primal-values (simplex-basis sd)) k))
+	       (print (cons k (aref (basis-header (simplex-basis sd)) k)))
+		   (return nil)))))
+      (unless test
+	(error "phase2 primal update")))))
+
+    
+
+;;;;
+(defun check-phase1-objective (sd)
+  (let* ((lp (simplex-lp sd))
+	 (b (simplex-basis sd))
+	 (flags (basis-column-flags b))
+	 (n (length (lp-columns lp)))
+	 (bh (basis-header b))
+	 (z 0))
+    (dotimes (j n)
+      (let ((col (aref (lp-columns lp) j))
+	    (flag (aref flags j)))
+	(cond ((zerop (column-c col)))
+	      ((and (eq flag 'nonbasic-upper-bound)
+		    (not (column-has-u col)))
+	       (incf z (* (- (lp-obj-sense lp)) (column-c col))))
+	      ((and (eq flag 'nonbasic-lower-bound)
+		    (not (column-has-l col)))
+	       (decf z (* (- (lp-obj-sense lp)) (column-c col)))))))
+    (dotimes (k (length bh))
+      (let* ((j (aref bh k))
+	     (v (aref (basis-primal-values b) k))
+	     (col (aref (lp-columns lp) j)))
+	(assert (eq 'basic (aref flags j)))
+	(incf z (* (- (lp-obj-sense lp)) (column-c col) v))))
+    (assert (= z (basis-obj-value b)))))
+    
+	
 
