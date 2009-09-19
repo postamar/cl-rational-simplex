@@ -16,11 +16,10 @@
 
 (defun print-hsv (v stream depth)
   (declare (ignore depth))
-  (format stream "#HSV: LENGTH ~A  ALLOC (~A,~A)~%       ~A~%" 
-	  (hsv-length v) (hsv-prev-alloc-counter v) 
-	  (hsv-current-alloc-counter v) (hsv-coef v))
+  (format stream "#HSV{ Length = ~D, Coef = ~A," (hsv-length v) (hsv-coef v))
   (dotimes (k (hsv-length v))
-    (format stream "  ~A:  ~A~%" (aref (hsv-is v) k) (aref (hsv-vis v) k))))
+    (format stream " (#~D = ~D)" (aref (hsv-is v) k) (aref (hsv-vis v) k)))
+  (format stream "}"))
 
 (defstruct (hsv-float
 	     (:constructor %make-hsv-float))

@@ -14,11 +14,10 @@
 
 ;;;; 
 (defstruct (basis
-	     (:constructor %make-basis))
+	     (:constructor %make-basis)
+	     (:print-function print-basis))
   (matrix         nil :type basis-matrix) ; basis matrix factorization
   (in-phase1      t   :type boolean) ; T if basis values are for phase 1
-  ;; status reflects in-, primal- or dual-feasability of the basis
-  (status         'undef :type t) 
   ;; contains column reference numbers of columns in basis
   (header         #() :type (simple-array fixnum 1))
   ;; dual-steepest-edge weights for good exiting variable selection
@@ -34,6 +33,11 @@
   ;; current objective value
   (obj-value      0   :type rational))
 
+(defun print-basis (b stream depth)
+  (declare (ignore depth))
+  (format stream "#BASIS{ Phase ~D, Objective = ~,5F}"
+	  (if (basis-in-phase1 b) 1 2)
+	  (coerce (basis-obj-value b) 'double-float)))
 
 
 
