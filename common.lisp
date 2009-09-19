@@ -24,7 +24,7 @@
 	       :adjustable t :fill-pointer t :element-type (quote ,type)))
 
 (defun find-index (vector value)
-  (declare ((simple-array fixnum *) vector)
+  (declare ((array fixnum *) vector)
 	   (fixnum value))
   (let ((l 0)
 	(u (length vector))
@@ -45,30 +45,52 @@
 	       (setf l p)
 	       (setf u p))))))
 
+(defun insert-in-increasing-vector (value vector)
+  (declare ((array fixnum *) vector)
+	   (fixnum value))
+  (let ((len (length vector)))
+    (if (zerop len)
+	(vector-push-extend value vector)
+	(let* ((lasti (- len 1))
+	       (lastv (aref vector lasti)))
+	  (if (< value lastv)
+	      (let ((insi -1))
+		(dotimes (i len)
+		  (let ((v (aref vector i)))
+		    (cond 
+		      ((= v value)
+		       (return-from insert-in-increasing-vector i))
+		      ((< value v)
+		       (setf insi i)
+		       (return)))))
+		(vector-push-extend lastv vector)
+		(loop for i from lasti above insi
+		   do (setf (aref vector i) (aref vector (- i 1))))
+		(setf (aref vector insi) value)
+		insi)
+	      (if (= value lastv)
+		  lasti
+		  (vector-push-extend value vector)))))))
+    
+    
+	   
 
-(defun remove-from-adjustable-vector (adjvector value)
-  (let ((l 0)
-	(r (length adjvector)))
-    (unless (zerop r)
-      (decf r)
-      (loop
-	 (cond ((<= r l)
-		(if (= value (aref adjvector l))
-		    (setf (fill-pointer adjvector) l)
-		    (setf (fill-pointer adjvector) (+ l 1)))
-		(return))
-	       ((= value (aref adjvector r))
-		(decf r))
-	       ((/= value (aref adjvector l))
-		(incf l))
-	       (t
-		(let ((temp (aref adjvector l)))
-		  (setf (aref adjvector l) (aref adjvector r))
-		  (setf (aref adjvector r) temp))
-		(decf r)
-		(incf l)))))))
 
+(defun remove-in-increasing-vector (value vector)
+  (declare ((array fixnum *) vector)
+	   (fixnum value))
+  (let ((len (length vector)))
+    (unless (zerop len)
+      (let ((lasti (- len 1))
+	    (remi (find-index vector value)))
+	(unless (= -1 remi)
+	  (loop for i from remi below lasti
+	     do (setf (aref vector i) (aref vector (+ i 1))))
+	  (decf (fill-pointer vector))
+	  t)))))
 
+  
+       
 (defun floor-log2 (n)
   (let ((p 0))
     (unless (< n 65536)
