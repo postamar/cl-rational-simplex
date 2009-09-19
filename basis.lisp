@@ -1,20 +1,40 @@
-;;;;; Basis info
+(in-package :rationalsimplex)
+
+;;;;; Basis data structure
+;;;;; 
+;;;;; A basis object contains all data relevant to a particular basis:
+;;;;; basic primal values, nonbasic primal values (lower or upper bound)
+;;;;; nonbasic dual values (reduced costs), dual-steepest-edge weights, etc.
+;;;;; Primal-infeasible values are stored in an appropriate data structure.
 
 
+;;;; Structure required for primal infeasabilites vector
 (splay-tree :val-type rational)
 
+
+;;;; 
 (defstruct (basis
 	     (:constructor %make-basis))
-  (matrix         nil :type basis-matrix)
-  (in-phase1      t   :type boolean)
-  (status         'undef :type t)
+  (matrix         nil :type basis-matrix) ; basis matrix factorization
+  (in-phase1      t   :type boolean) ; T if basis values are for phase 1
+  ;; status reflects in-, primal- or dual-feasability of the basis
+  (status         'undef :type t) 
+  ;; contains column reference numbers of columns in basis
   (header         #() :type (simple-array fixnum 1))
+  ;; dual-steepest-edge weights for good exiting variable selection
   (dse-weights    #() :type (simple-array rational 1))
+  ;; nonbasic dual variable values
   (reduced-costs  #() :type (simple-array rational 1))
+  ;; nonbasic primal variable values
   (column-flags   #() :type (simple-array symbol 1))
-  (obj-value      0   :type rational)
+  ;; primal basic variable values
   (primal-values  #() :type (simple-array rational 1))
-  (primal-infeas  (error "basis constructor") :type splay-tree-fixnum-rational))
+  ;; primal basic infeasible variables and their excess squared
+  (primal-infeas  (error "basis constructor") :type splay-tree-fixnum-rational)
+  ;; current objective value
+  (obj-value      0   :type rational))
+
+
 
 
 ;;;; Sets nonbasic variables for initial basis in phase 1
@@ -50,7 +70,7 @@
 	       (decf z (* (- (lp-obj-sense lp)) (column-c col)))))))))
 
 
-;;;;
+;;;; Gets amount of bound excess for primal infeasable basic variable
 (defun get-delta (in-phase1 x col)
   (if in-phase1
       (cond ((and (column-has-l col)
@@ -119,7 +139,7 @@
     (let* ((refac-period (min 200 (+ 10 (floor m 20))))
 	   (matrix (make-basis-matrix :lp lp :refactorization-period refac-period)))
       (fill-basis-matrix matrix lp header)
-      (basis-matrix-lu-decomposition matrix)
+      (basis-matrix-lu-factorization matrix)
       (%make-basis
        :matrix matrix
        :header header
@@ -132,7 +152,8 @@
     
 
 
-;;;;
+;;;; Returns the value corresponding to a nonbasic variable bound
+;;;; Varies for phases 1 and 2
 (defun nonbasic-value (in-phase1 col flag)
   (if in-phase1
       (cond ((eq flag 'nonbasic-lower-bound)
@@ -151,7 +172,9 @@
 	     (error "inappropriate flag for phase 2")))))
 
 
-;;;;
+
+;;;; Difference between upper and lower bound of variable
+;;;; Varies for phases 1 and 2
 (defun column-u-minus-l (in-phase1 col)
   (if in-phase1 
       (let ((range 2))
@@ -163,7 +186,9 @@
       (- (column-u col) (column-l col))))
 
 
-;;;;
+
+;;;; Difference between lower and upper bound of variable
+;;;; Varies for phases 1 and 2
 (defun column-l-minus-u (in-phase1 col)
   (if in-phase1 
       (let ((range (- 2)))
@@ -176,7 +201,9 @@
 
 
 
-;;;;  
+;;;; Updates primal infeasability vector depending on how
+;;;; variable in i-th position of basis header varied in 
+;;;; its primal value x, and depending on phase 1 or 2
 (defun basis-update-primal-infeasability (primal-infeas i x col inphase1)
   (multiple-value-bind (sti there)
       (splay-tree-fixnum-rational-find-key primal-infeas i)
@@ -204,3 +231,24 @@
 	     (splay-tree-fixnum-rational-set primal-infeas i delta))))
       (there 
        (splay-tree-fixnum-rational-remove primal-infeas i)))))
+
+
+
+;;;;; DEBUGGING
+
+(defun check-infeas-vector (b lp)
+  (when *checks*
+    (let ((m (basis-matrix-size (basis-matrix b)))
+	  (infeas (basis-primal-infeas b)))
+      (dotimes (i m)
+	(let* ((x (aref (basis-primal-values b) i))
+	       (col-ref (aref (basis-header b) i))
+	       (col (adjvector-column-ref (lp-columns lp) col-ref))
+	       (delta (get-delta (basis-in-phase1 b) x col)))
+	  (multiple-value-bind (sti there)
+	      (splay-tree-fixnum-rational-find-key infeas i)
+	    (if (zerop delta)
+		(assert (not there))
+		(assert (and there
+			     (= (splay-tree-fixnum-rational-value infeas sti)
+				(* delta delta)))))))))))

@@ -1,11 +1,24 @@
+(in-package :rationalsimplex)
+
+;;;;; LU factorization update
+;;;;;
+;;;;; The Forrest-Tomlin method was chosen for implementation
+;;;;; for its simplicity and lack of fill-in in U. If a better option
+;;;;; presents itself (i.e. no fill-in in U, less fill-in during ?TRAN)
+;;;;; it should be implemented instead.
 
 
-;;;;
+
+;;;; Updates U by replacing column pivot-j with spike
+;;;; and updates permutation matrices as well as 
+;;;; upper-triangular element sequences accordingly.
+;;;; Also initializes the values for computing the multipliers
+;;;; in the resulting Lu-eta matrix.
 (defun lu-update-replace-column (bm pivot-j spike)
-  (let* ((u (aref (basis-matrix-u-columns bm) pivot-j))
+  (let* ((u (aref (basis-matrix-u-columns bm) pivot-j)) ; the modified column
 	 (m (basis-matrix-size bm))
-	 (mus (basis-matrix-update-row-vals bm))
-	 (u-seq (aref (basis-matrix-u-seqs bm) pivot-j))
+	 (mus (basis-matrix-update-row-vals bm)) ; the multipliers
+	 (u-seq (aref (basis-matrix-u-seqs bm) pivot-j)) ; the modified sequence
 	 (lastk (- m 1))
 	 (i->pi (basis-matrix-i->pi bm))
 	 (j->pj (basis-matrix-j->pj bm))
@@ -82,7 +95,8 @@
 
 
 
-;;;; 
+;;;; Computes the multiplier values in the Lu-eta matrix
+;;;; by in effect solving a system of linear equations
 (defun lu-update-compute-values (bm pivot-k)
   (let* ((m (basis-matrix-size bm))
 	 (pj->j (basis-matrix-pj->j bm))
@@ -125,18 +139,20 @@
 		      (if (zerop cdenom)
 			  (setf cdenom denomj)
 			  (mulf cdenom (/ denomj (gcd cdenom denomj))))))))))
+    ;; returns lowest common denominator for multipliers
     cdenom))
 
 
 
-;;;;
+;;;; Builds Lu-eta matrix from multipliers
+;;;; and updates the value of the pivot element in the new column
 (defun lu-update-build-eta (bm pivot-k pivot-j pivot-ci cdenom)
   (let* ((m (basis-matrix-size bm))
 	 (l (aref (basis-matrix-l-file bm) (basis-matrix-n-l-file bm)))
 	 (pi->i (basis-matrix-pi->i bm))
 	 (pivot-col (aref (basis-matrix-u-columns bm) pivot-j))
 	 (mus (basis-matrix-update-row-vals bm)))
-    ;; build eta column
+    ;; build Lu-eta column
     (if (zerop cdenom)
 	(loop for k from pivot-k below (- m 1)
 	   do (assert (zerop (aref mus k))))
@@ -160,7 +176,7 @@
       (setf (aref (basis-matrix-l-pivot-file bm) (basis-matrix-n-l-file bm)) 
 	    (aref pi->i (- m 1)))
       (incf (basis-matrix-n-l-file bm)))
-    ;; update new column in u
+    ;; update new column in U
     (let ((pivot-denom (denominator (aref mus (- m 1)))))
       (divf (hsv-coef pivot-col) pivot-denom)
       (dotimes (ci (hsv-length pivot-col))
@@ -171,7 +187,7 @@
     
    
     
-;;;;
+;;;; The function that ties it all together
 (defun lu-update (bm j spike)
   (multiple-value-bind (pivot-ci pivot-k)
       (lu-update-replace-column bm j spike)

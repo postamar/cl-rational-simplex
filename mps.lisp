@@ -1,20 +1,24 @@
-;;;; MPS file parser
+(in-package :rationalsimplex)
 
-;;; data structure containing everything in the MPS file
-;;; in a non-awkward manner
-(defstruct mps 
-  lp-name
-  obj-spec
-  row-spec
-  row-rhss
-  row-lhss
-  col-lbounds
-  col-ubounds
-  col-spec)
+;;;;; MPS file parser
+
+
+
+;;;; Instances of this data structure contain 
+;;;; everything stored in an MPS file
+(defstruct mps
+  lp-name      ; the name of the lp
+  obj-spec     ; the sense and name of the objective function
+  row-spec     ; the sense of the rows
+  row-rhss     ; the right-hand side
+  row-lhss     ; and left hand side of each row
+  col-lbounds  ; the lower
+  col-ubounds  ; and upper bounds for each variable
+  col-spec)    ; and their cost and constraint matrix entries 
 
    
 
-;;; trims whitespace left and right of string
+;;;; Trims whitespace left and right of string
 (defun whitespace-trim (line)
   (let ((l 0)
 	(r (length line)))
@@ -34,7 +38,7 @@
 	
   
 
-;;; scans one line from the MPS file into a list
+;;;; Parses fields in a line from the MPS file
 (defun listify (line)
   (cond ((zerop (length line))
 	 '())
@@ -67,7 +71,7 @@
 	       collect (whitespace-trim elt)))))))
 
 
-;;; reads the next non-empty line in the MPS file
+;;;; Reads the next non-empty line in the MPS file
 (defun get-next-line-list (mps-stream)
   (multiple-value-bind (line eof) (read-line mps-stream nil t)
 	  (if eof 
@@ -79,7 +83,7 @@
       
 
 
-;;; reads a block in the MPS file (rows, columns, etc.)
+;;;; Reads a block in the MPS file (rows, columns, etc.)
 (defmacro read-mps-block (mps-stream block end-tags)
   (let ((line-list (gensym)))
     `(loop
@@ -96,7 +100,7 @@
 
 
 
-;;; generates an association list for the data in the column block 
+;;;; Generates an association list for the data in the column block 
 (defun make-coef-alist (list)
   (let ((length (length list)))
     (cond ((= length 2)
@@ -111,8 +115,8 @@
 
 
 
-;;; this function opens, reads and parses an MPS file
-;;; it returns an mps structure
+;;;; This function opens, reads and parses an MPS file,
+;;;; it returns an mps structure
 (defun load-from-mps (mps-full-file-name)
   (let ((data)
 	(header)
@@ -266,15 +270,5 @@
     (values data n-named n-slack m)))
 	     
 
-  
 	    
-
-
-
-      
-	
-	    
-
-      
-      
 

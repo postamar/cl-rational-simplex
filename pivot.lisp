@@ -1,12 +1,19 @@
+(in-package :rationalsimplex)
+
 ;;;;; Dynamic Markowitz pivot implementation
 ;;;;;
+;;;;; During factorization, pivot elements are selected
+;;;;; using the Markowitz criterion: in the residual matrix,
+;;;;; select the non-zero element which minimizes (nr-1).(nc-1)
+;;;;; where nr and nc are the non-zero counts in the row and
+;;;;; the column of the pivot element, respectively.
+;;;;; The implementation is slightly complicated by the fact that 
+;;;;; fill-in occurs during the factorization.
 
 
 
 
-
-
-;;;;
+;;;; Auxilliary function for pivot-find
 (defun markowitz-col (bm j col-nnz)
   (let ((min-i -1)
 	(min-ci -1)
@@ -30,7 +37,7 @@
 
 
 
-;;;;
+;;;; Auxilliary function for pivot-find
 (defun markowitz-row (bm i row-nnz)
   (let ((min-j -1)
 	(min-ci -1)
@@ -51,7 +58,7 @@
 
 
 
-;;;;
+;;;; Selects the best pivot element in the residual matrix
 (defun pivot-find (bm)
   (let* ((m (basis-matrix-size bm))
 	 (m*m (* m m))
@@ -60,35 +67,41 @@
 	 (pivot-i -1)
 	 (pivot-j -1)
 	 (pivot-ci -1))
-    (cond ((/= 0 (aref (basis-matrix-col-bucket-sizes bm) 0))
-	   (error "zero weight col bucket should be empty"))
-	  ((/= 0 (aref (basis-matrix-row-bucket-sizes bm) 0))
-	   (error "zero weight row bucket should be empty"))
-	  ((< 0 (aref (basis-matrix-col-bucket-sizes bm) 1))
-	   (let ((j (aref (aref (basis-matrix-col-buckets bm) 1)
-			  (- (aref (basis-matrix-col-bucket-sizes bm) 1) 1))))
-	     (multiple-value-bind (i ci mc)
-		 (markowitz-col bm j 1)
-	       (values (= mc m*m) i j ci))))
-	  ((< 0 (aref (basis-matrix-row-bucket-sizes bm) 1))
-	   (let* ((i (aref (aref (basis-matrix-row-buckets bm) 1)
-			   (- (aref (basis-matrix-row-bucket-sizes bm) 1) 1))))
-	     (multiple-value-bind (j ci mc)
-		 (markowitz-row bm i 1)
-	       (values (= mc m*m) i j ci))))
-	  (t	  
-	   (loop named find-pivot-loop for bucket-weight from 2 upto m
-	      do (let ((col-bsize (aref (basis-matrix-col-bucket-sizes bm) bucket-weight))
-		       (row-bsize (aref (basis-matrix-row-bucket-sizes bm) bucket-weight))
-		       (col-bucket (aref (basis-matrix-col-buckets bm) bucket-weight))
-		       (row-bucket (aref (basis-matrix-row-buckets bm) bucket-weight))
-		       (col-mc-bound (* (- bucket-weight 1) (- bucket-weight 1)))
-		       (row-mc-bound (* bucket-weight (- bucket-weight 1))))
-		   (unless (zerop col-bsize)
-		     (dotimes (kj col-bsize)
-		       (let ((j (aref col-bucket kj)))
-			 (multiple-value-bind (i ci mc)
-			     (markowitz-col bm j bucket-weight)
+    
+    (cond 
+      ;; error checking
+      ((/= 0 (aref (basis-matrix-col-bucket-sizes bm) 0))
+       (error "zero weight col bucket should be empty"))
+      ((/= 0 (aref (basis-matrix-row-bucket-sizes bm) 0))
+       (error "zero weight row bucket should be empty"))
+      ;; select singleton pivots if possible,
+      ;; i.e. those in the buckets of weight 1
+      ((< 0 (aref (basis-matrix-col-bucket-sizes bm) 1))
+       (let ((j (aref (aref (basis-matrix-col-buckets bm) 1)
+		      (- (aref (basis-matrix-col-bucket-sizes bm) 1) 1))))
+	 (multiple-value-bind (i ci mc)
+	     (markowitz-col bm j 1)
+	   (values (= mc m*m) i j ci))))
+      ((< 0 (aref (basis-matrix-row-bucket-sizes bm) 1))
+       (let* ((i (aref (aref (basis-matrix-row-buckets bm) 1)
+		       (- (aref (basis-matrix-row-bucket-sizes bm) 1) 1))))
+	 (multiple-value-bind (j ci mc)
+	     (markowitz-row bm i 1)
+	   (values (= mc m*m) i j ci))))
+      ;; select the best pivot element, relative to selection criterion
+      (t	 
+       (loop named find-pivot-loop for bucket-weight from 2 upto m
+	  do (let ((col-bsize (aref (basis-matrix-col-bucket-sizes bm) bucket-weight))
+		   (row-bsize (aref (basis-matrix-row-bucket-sizes bm) bucket-weight))
+		   (col-bucket (aref (basis-matrix-col-buckets bm) bucket-weight))
+		   (row-bucket (aref (basis-matrix-row-buckets bm) bucket-weight))
+		   (col-mc-bound (* (- bucket-weight 1) (- bucket-weight 1)))
+		   (row-mc-bound (* bucket-weight (- bucket-weight 1))))
+	       (unless (zerop col-bsize)
+		 (dotimes (kj col-bsize)
+		   (let ((j (aref col-bucket kj)))
+		     (multiple-value-bind (i ci mc)
+			 (markowitz-col bm j bucket-weight)
 			   (when (< mc mc-min)
 			     (setf pivot-i i
 				   pivot-j j
@@ -99,22 +112,23 @@
 			   (when (and (<= (basis-matrix-row-col-max bm) (incf n)) 
 				      (< mc-min m*m))
 			     (return-from find-pivot-loop))
-		   (unless (zerop row-bsize)
-		     (dotimes (ki row-bsize)
-		       (let ((i (aref row-bucket ki)))
-			 (multiple-value-bind (j ci mc)
-			     (markowitz-row bm i bucket-weight)
-			   (when (< mc mc-min)
-			     (setf pivot-i i
-				   pivot-j j
-				   pivot-ci ci
-				   mc-min mc)
-			     (when (<= mc-min row-mc-bound)
-			       (return-from find-pivot-loop)))
-			   (when (and (<= (basis-matrix-row-col-max bm) (incf n))
-				      (< mc-min m*m))
-			     (return-from find-pivot-loop))))))))))))
-	   (values (= mc-min m*m) pivot-i pivot-j pivot-ci)))))
+			   (unless (zerop row-bsize)
+			     (dotimes (ki row-bsize)
+			       (let ((i (aref row-bucket ki)))
+				 (multiple-value-bind (j ci mc)
+				     (markowitz-row bm i bucket-weight)
+				   (when (< mc mc-min)
+				     (setf pivot-i i
+					   pivot-j j
+					   pivot-ci ci
+					   mc-min mc)
+				     (when (<= mc-min row-mc-bound)
+				       (return-from find-pivot-loop)))
+				   (when (and (<= (basis-matrix-row-col-max bm) (incf n))
+					      (< mc-min m*m))
+				     (return-from find-pivot-loop))))))))))))
+       ;; return (T if success, row index, column index, index in column-hsv)
+       (values (= mc-min m*m) pivot-i pivot-j pivot-ci)))))
 		   
 			       
 
@@ -175,7 +189,7 @@
 
 
 			       
-;;;;			   
+;;;; Updates pivot buckets and residual matrix after pivot selection and removal
 (defun pivot-count-update (bm pivot-i pivot-j)
   (let ((pivot-row-nnz (aref (basis-matrix-row-nnz bm) pivot-i))
 	(pivot-col-nnz (aref (basis-matrix-col-nnz bm) pivot-j))

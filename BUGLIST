@@ -1,0 +1,34 @@
+*********** THIS IS THE TO-DO LIST
+
+
+**** BUGS PROPER
+
+- maros.mps in the netlib library fails in preparation of phase2.
+
+- solver doesn't work with preprocessor turned on.
+
+
+
+**** OMISSIONS, CONCERNS, TO-DO
+
+- no optimization for speed in performance-critical TRAN functions,
+  in pivot row computation and basis primal, dual and weights values update.
+
+- preprocessor is extremely basic, and doesn't work anymore.
+
+
+
+**** MISSING FEATURES
+
+- Forrest-Tomlin update could be replaced by Suhl-Suhl or any other suitable
+  update method. Concerns are different than in case of floating point implementations
+  as we care little about numerical stability *directly* but only want to reduce
+  numerical fill-in in U and in results during f- and b-trans as much as possible.
+  A scheme with permutations (c.f. Saunders, Reid...) should be possible.
+
+- A cost perturbation scheme should be implemented to avoid dual degenaracy, 
+  and hence, a primal simplex algorithm is necessary
+
+- At least some basic parallelism, many computations can (and should) be offloaded
+  into another thread. Off the top of my head: DSE Ftran computation, Basis matrix
+  refactorization or update, Primal values update after bound flips...

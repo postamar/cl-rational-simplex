@@ -1,26 +1,19 @@
-;;;;; Data structures for everything regarding hyper-sparse vectors
-;;;;;
-;;;;; i.e. vectors whose non-zero components are stored in arrays
-;;;;; containing their indices and their values, which are factorized
-;;;;; to a common denominator in the case of rational vectors
-;;;;;
-;;;;; Implementation is similar to that of adjustable vectors
+(in-package :rationalsimplex)
+
+;;;; Data structures for everything regarding hyper-sparse vectors
 
 
-;;;; Rational hyper-sparse vector data structure
+;;;; hyper-sparse vector data structures
 (defstruct (hsv
 	     (:constructor %make-hsv)
 	     (:print-function print-hsv))
-  (coef    1   :type rational)                       
+  (coef    1   :type rational)
   (length  0   :type fixnum)
   (prev-alloc-counter 8 :type fixnum)
   (current-alloc-counter 13 :type fixnum)
   (is      (error "hsv constructor") :type (simple-array fixnum 1))
   (vis     (error "hsv constructor") :type (simple-array integer 1)))
 
-
-
-;;;; Printer function for rational HSV
 (defun print-hsv (v stream depth)
   (declare (ignore depth))
   (format stream "#HSV: LENGTH ~A  ALLOC (~A,~A)~%       ~A~%" 
@@ -29,9 +22,6 @@
   (dotimes (k (hsv-length v))
     (format stream "  ~A:  ~A~%" (aref (hsv-is v) k) (aref (hsv-vis v) k))))
 
-
-
-;;;; Floating-point hyper-sparse vector data structure
 (defstruct (hsv-float
 	     (:constructor %make-hsv-float))
   (length  0   :type fixnum)
@@ -41,12 +31,12 @@
   (vfs     (error "hsv float constructor") :type (simple-array double-float 1)))
 
 
-
 ;;;; HSV constructors
 (defun make-hsv ()
   (%make-hsv
    :is  (make-array 13 :initial-element -1 :element-type 'fixnum)
    :vis (make-array 13 :initial-element 0 :element-type 'integer)))
+
 
 
 (defun make-hsv-float ()
@@ -57,6 +47,7 @@
 
  
 ;;;; Empties HSV 
+
 (declaim (inline reset-hsv))
 (defun reset-hsv (v)
   (setf (hsv-coef v) 1
@@ -67,8 +58,6 @@
   (setf (hsv-float-length vf) 0))
 	
 
-
-;;;; In-place copy functions
 (defun copy-hsv-into-hsv (hsvsrc hsvdest)
   (let* ((n (hsv-length hsvsrc))
 	 (c (hsv-coef hsvsrc)))
@@ -114,16 +103,11 @@
 	    (coerce (* c (aref (hsv-vis hsv) ci)) 'double-float)))))
     
 
-
-;;;; Gets rational value
 (declaim (inline hsv-ratio))
 (defun hsv-ratio (v ci)
   (* (hsv-coef v) (aref (hsv-vis v) ci)))
 
 
-
-;;;; Factorizes non-zero values of rational HSV
-;;;; to largest common factor
 (defun hsv-normalize (v)
   (unless (zerop (hsv-length v))
     (let ((vgcd 0))
@@ -146,7 +130,6 @@
 
 
 
-;;;; In-place sort of rational HSV, increasing-index order
 (defun hsv-sort-indices-increasing (v)
   (flet ((sift-down (root end)
 	   (loop
@@ -179,8 +162,7 @@
 	      (sift-down 0 (- end 1)))))))
 
 
-
-;;;; Removes zero values in rational HSV
+;;;;
 (defun hsv-remove-zeros (v)
   (let ((nz-ci 0)
 	(v-is (hsv-is v))
@@ -197,7 +179,8 @@
 
 
 
-;;;; Appends non-zero element in rational HSV
+
+;;;;
 (defun hsv-add (ind val hsv)
   (when (<= (hsv-current-alloc-counter hsv) (hsv-length hsv))
     (rotatef (hsv-current-alloc-counter hsv) (hsv-prev-alloc-counter hsv))
@@ -213,20 +196,15 @@
   (incf (hsv-length hsv)))
 
 
-
-;;;; Removes element in rational HSV
-;;;; maintaining existing order
+;;;;
 (defun hsv-remove (ci hsv)
   (let ((last-ci (- (hsv-length hsv) 1)))
     (when (< ci last-ci)
       (rotatef (aref (hsv-is hsv) ci) (aref (hsv-is hsv) last-ci))
       (rotatef (aref (hsv-vis hsv) ci) (aref (hsv-vis hsv) last-ci)))
     (decf (hsv-length hsv))))
-    
-  
+      
 
-;;;; Binary search of index in rational HSV
-;;;; assumes HSV to be sorted, increasing-index order
 (defun hsv-find (ind hsv)
   (find-index-bounded (hsv-is hsv) (hsv-length hsv) ind))
 

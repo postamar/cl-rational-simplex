@@ -1,9 +1,12 @@
+(in-package :rationalsimplex)
+
 ;;;;; LU factorization of the basis
-;;;;;
+;;;;; 
+;;;;; Factorizes B from scratch, by gaussian elimination
 
 
 
-;;;; makes new l-eta matrix, if necessary
+;;;; Makes new L-eta matrix, if necessary
 (defun lu-split-column (bm pivot-i pivot-j k pivot-ci)
   (let* ((i->pi (basis-matrix-i->pi bm))
 	 (fill-in-counter (aref (basis-matrix-fill-ins bm) pivot-j))
@@ -68,7 +71,7 @@
     
 
 
-;;;;
+;;;; Auxilliary function for basis-matrix-lu-factorization
 (defun lu-prepare-update (b pivot-l k)
   (let ((refs (basis-matrix-refs b))
 	(m (basis-matrix-size b)))
@@ -84,7 +87,7 @@
   
 
 
-;;;;
+;;;; Updates column in residual matrix after pivot
 (defun lu-update-right (bm pivot-l pivot-pj j index-j-pivot-i)
   (let* ((u (aref (basis-matrix-u-columns bm) j))
 	 (m (basis-matrix-size bm))
@@ -135,19 +138,19 @@
 
 
 
-;;;; LU decomposition
+;;;; LU factorization
 ;;;; returns t on success, nil if basis matrix is singular
-(defun basis-matrix-lu-decomposition (bm)
+(defun basis-matrix-lu-factorization (bm)
   (dotimes (k (basis-matrix-size bm) t)
-    ;; perform pivot
+    ;; select and perform pivot
     (multiple-value-bind (pivot-i pivot-j pivot-ci pivot-row-nnz)
 	(basis-matrix-perform-pivot bm k) 
       (when (= -1 pivot-j)
-	(return))
+	(return)) ; pivot unsuccessful
       (assert (not (basis-matrix-is-singular bm)))
       (assert (= pivot-i (aref (basis-matrix-pi->i bm) k)))
       (assert (= pivot-j (aref (basis-matrix-pj->j bm) k)))
-      ;; make l eta matrix, if necessary
+      ;; make L eta matrix, if necessary
       (let ((l-file-index (lu-split-column bm pivot-i pivot-j k pivot-ci)))
 	(unless (= -1 l-file-index)
 	  ;; update remaining columns

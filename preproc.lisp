@@ -1,4 +1,9 @@
+(in-package :rationalsimplex)
+
 ;;;;; LP preprocessing
+;;;;; CURRENTLY NOT FUNCTIONAL
+;;;;; and, hence, not commented properly...
+;;;;; move along, citizen...
 
 
 

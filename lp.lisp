@@ -1,7 +1,7 @@
-;;;;; Data structures for everything regarding the LP
-;;;;; 
-;;;;; The LP can have rows/columns dynamically added and removed
-;;;;; allowing for the use of a preprocessor
+(in-package :rationalsimplex)
+
+;;;; Data structures for everything regarding the LP
+;;;;
 
 
 ;;;;
@@ -12,16 +12,13 @@
 
 
 
-;;;; 
+;;;;
 (defstruct row
   (name          ""  :type string)
-  (ref           -1  :type fixnum)    ; row reference number
+  (ref           -1  :type fixnum)
   (is-active     nil   :type boolean)
-  (slack-col-ref -1  :type fixnum)    ; reference number of slack variable
-  (coef          1   :type rational)  ; row factor, changed by crash (not implemented)
-  ;; reference numbers and indices in hsv of column 
-  ;; containing non-zero elements in row
-  ;; in order of increasing column reference numbers
+  (slack-col-ref -1  :type fixnum)
+  (coef          1   :type rational)
   (col-refs      (make-empty-adjvector-fixnum) :type adjvector-fixnum)
   (col-indices   (make-empty-adjvector-fixnum) :type adjvector-fixnum))
 
@@ -30,20 +27,18 @@
 ;;;;
 (defstruct column
   (name         ""  :type string)
-  (ref          -1  :type fixnum)   ; reference number
+  (ref          -1  :type fixnum)
   (is-active    nil :type boolean)
-  (is-slack     nil :type boolean)  ; T if slack variable
-  (c            0   :type rational) ; cost
-  (has-l        t   :type boolean)  ; T if is bounded below
-  (has-u        nil :type boolean)  ; T if is bounded above
-  (l            0   :type rational) ; value of lower bound
-  (u            0   :type rational) ; value of upper bound
-  ;; non-zero variable coefficients in constraint matrix
-  ;; specified by row reference number
+  (is-slack     nil :type boolean)
+  (c            0   :type rational)
+  (has-l        t   :type boolean)
+  (has-u        nil :type boolean)
+  (l            0   :type rational)
+  (u            0   :type rational)
   (hsv          (error "column constructor") :type hsv))
 
 
-;;;; more adjustable vector definitions
+
 (define-adjustable-vector integer)
 (declaim (inline make-empty-adjvector-integer))
 (defun make-empty-adjvector-integer ()
@@ -52,28 +47,21 @@
 (define-adjustable-vector column)
 (define-adjustable-vector row)
 
-
-
-;;;; The LP data structure proper
+;;;; 
 (symbol-macrolet
     ((err (error "lp constructor")))
   (defstruct lp
     (name            ""  :type string)
-    (is-infeasible   nil :type boolean) ; T if found infeasible by preprocessor
-    (is-unbounded    nil :type boolean) ; T if found unbounded by preprocessor
+    (is-infeasible   nil :type boolean)
+    (is-unbounded    nil :type boolean)
     (obj-name        ""  :type string)
-    (obj-sense       -1  :type fixnum)  ; -1 in case of minimization problem
+    (obj-sense       -1  :type fixnum)
     (columns         err :type adjvector-column)
     (rows            err :type adjvector-row)
-    ;; row and column reference numbers
-    ;; accessed by index
-    (active-row-refs err :type adjvector-fixnum) 
+    (active-row-refs err :type adjvector-fixnum)
     (active-col-refs err :type adjvector-fixnum)
-    ;; row and column indices
-    ;; accessed by reference number
     (active-row-inds err :type adjvector-fixnum)
     (active-col-inds err :type adjvector-fixnum)
-    ;; hash tables for reference numbers
     (col-ref-by-name (error "lp requires hashtable")
 		     :type hash-table)
     (row-ref-by-name (error "lp requires hashtable") 
@@ -82,112 +70,12 @@
 
 
 
-;;;; Get k-th non-zero constraint coefficient
-;;;; in column col
-(declaim (inline rational-in-column))
-(defun rational-in-column (col k)
+;;;; Ratio in column
+(defun rational-in-column (col index)
   (* (hsv-coef (column-hsv col))
-     (aref (hsv-vis (column-hsv col)) k)))
+     (aref (hsv-vis (column-hsv col)) index)))
 
 
-
-;;;; Gets cost for column with reference number j
-(declaim (inline lp-get-cost))
-(defun lp-get-cost (lp j)
-  (* (- (lp-obj-sense lp)) (column-c (adjvector-column-ref (lp-columns lp) j))))
-
-
-
-;;;; LP modification functions
-(defun lp-remove-column (lp col-ref)
-  (let ((ind (adjvector-fixnum-ref (lp-active-col-inds lp) col-ref))
-	(last-ind (- (adjvector-fixnum-fill-pointer (lp-active-col-refs lp)) 1)))
-    (setf (column-is-active (adjvector-column-ref (lp-columns lp) col-ref)) nil
-	  (adjvector-fixnum-ref (lp-active-col-inds lp) col-ref) -1)
-    (unless (= ind last-ind)
-      (let ((last-col-ref (adjvector-fixnum-ref (lp-active-col-refs lp) last-ind)))
-	(setf (adjvector-fixnum-ref (lp-active-col-refs lp) ind) last-col-ref)
-	(setf (adjvector-fixnum-ref (lp-active-col-inds lp) last-col-ref) ind)))
-    (adjvector-fixnum-pop (lp-active-col-refs lp))))
-
-(defun lp-remove-row (lp row-ref)
-  (let ((ind (adjvector-fixnum-ref (lp-active-row-inds lp) row-ref))
-	(last-ind (- (adjvector-fixnum-fill-pointer (lp-active-row-refs lp)) 1)))
-    (setf (row-is-active (adjvector-row-ref (lp-rows lp) row-ref)) nil
-	  (adjvector-fixnum-ref (lp-active-row-inds lp) row-ref) -1)
-    (unless (= ind last-ind)
-      (let ((last-row-ref (adjvector-fixnum-ref (lp-active-row-refs lp) last-ind)))
-	(setf (adjvector-fixnum-ref (lp-active-row-refs lp) ind) last-row-ref)
-	(setf (adjvector-fixnum-ref (lp-active-row-inds lp) last-row-ref) ind)))
-    (adjvector-fixnum-pop (lp-active-row-refs lp))))
-
-
-
-;;;;; Iteration macros
-;;;;; Used by preprocessor 
-;;;;; (only, so far)
-
-;;;; Column iteration macro
-(defmacro docol ((lp 
-		  col
-		  &key 
-		  (index (gensym)) 
-		  (row-ref (gensym))
-		  (row (gensym)))
-		 &body body)
-  (let ((n-indices (gensym)))
-    `(let ((,n-indices (hsv-length (column-hsv ,col))))
-       (dotimes (,index ,n-indices)
-	 (let* ((,row-ref (aref (hsv-is (column-hsv ,col)) ,index))
-		(,row (adjvector-row-ref (lp-rows ,lp) ,row-ref)))
-	   (when (row-is-active ,row)
-	     ,@body))))))
-
-
-
-;;;; Row iteration macros
-(defmacro dorow ((lp 
-		  row
-		  &key 
-		  (visit-only-fixed nil)
-		  (visit-also-fixed nil)
-		  (visit-slack t)
-		  (col-ref (gensym)) 
-		  (index (gensym)) 
-		  (col (gensym))
-		  (a nil)
-		  (has-l nil)
-		  (has-u nil)
-		  (l nil)
-		  (u nil))
-		 &body body)
-  (let ((n (gensym))
-	(k (gensym)))
-    `(let ((,n (adjvector-fixnum-fill-pointer (row-col-refs ,row))))
-       (dotimes (,k ,n)
-	 (let* ((,col-ref (adjvector-fixnum-ref (row-col-refs ,row) ,k))
-		(,index (adjvector-fixnum-ref (row-col-indices ,row) ,k))
-		(,col (adjvector-column-ref (lp-columns ,lp) ,col-ref)))
-	   (symbol-macrolet ,(remove nil (list 
-				       (when has-l `(,has-l (column-has-l ,col)))
-				       (when has-u `(,has-u (column-has-u ,col)))
-				       (when l `(,l (column-l ,col)))
-				       (when u `(,u (column-u ,col)))))
-	     (unless ,(if visit-only-fixed
-			  `(not (column-is-active ,col))
-			  `(or ,(unless visit-also-fixed `(not (column-is-active ,col)))
-			       ,(unless visit-slack `(column-is-slack ,col))))
-	       ,@(if a
-		    `((symbol-macrolet
-			  ((,a (aref (hsv-vis (column-hsv ,col)) ,index)))
-			,@body))
-		    body))))))))
-
-
-
-
-;;;;; Constructor functions
-;;;;; For generating LP from MPS object
 
 ;;;; Arithmetic functions
 (defun factorize-ratio-pair (f1 nl1 f2 nl2)
@@ -220,8 +108,32 @@
 
 
 
+;;;; LP modification functions
+(defun lp-remove-column (lp col-ref)
+  (let ((ind (adjvector-fixnum-ref (lp-active-col-inds lp) col-ref))
+	(last-ind (- (adjvector-fixnum-fill-pointer (lp-active-col-refs lp)) 1)))
+    (setf (column-is-active (adjvector-column-ref (lp-columns lp) col-ref)) nil
+	  (adjvector-fixnum-ref (lp-active-col-inds lp) col-ref) -1)
+    (unless (= ind last-ind)
+      (let ((last-col-ref (adjvector-fixnum-ref (lp-active-col-refs lp) last-ind)))
+	(setf (adjvector-fixnum-ref (lp-active-col-refs lp) ind) last-col-ref)
+	(setf (adjvector-fixnum-ref (lp-active-col-inds lp) last-col-ref) ind)))
+    (adjvector-fixnum-pop (lp-active-col-refs lp))))
 
-;;;; LP Constructor from MPS file
+(defun lp-remove-row (lp row-ref)
+  (let ((ind (adjvector-fixnum-ref (lp-active-row-inds lp) row-ref))
+	(last-ind (- (adjvector-fixnum-fill-pointer (lp-active-row-refs lp)) 1)))
+    (setf (row-is-active (adjvector-row-ref (lp-rows lp) row-ref)) nil
+	  (adjvector-fixnum-ref (lp-active-row-inds lp) row-ref) -1)
+    (unless (= ind last-ind)
+      (let ((last-row-ref (adjvector-fixnum-ref (lp-active-row-refs lp) last-ind)))
+	(setf (adjvector-fixnum-ref (lp-active-row-refs lp) ind) last-row-ref)
+	(setf (adjvector-fixnum-ref (lp-active-row-inds lp) last-row-ref) ind)))
+    (adjvector-fixnum-pop (lp-active-row-refs lp))))
+
+
+
+;;;; LP Constructor
 (defun mps->lp (mps-data)
   (let*  ((n       (length (mps-col-spec mps-data)))
 	  (m       (length (mps-row-spec mps-data)))
@@ -365,6 +277,69 @@
 	     :active-col-inds acind
 	     :col-ref-by-name cibyn
 	     :row-ref-by-name ribyn)))
+
+
+;;;;
+(declaim (inline lp-get-cost))
+(defun lp-get-cost (lp j)
+  (* (- (lp-obj-sense lp)) (column-c (adjvector-column-ref (lp-columns lp) j))))
+
+
+;;;; Column iteration macro
+(defmacro docol ((lp 
+		  col
+		  &key 
+		  (index (gensym)) 
+		  (row-ref (gensym))
+		  (row (gensym)))
+		 &body body)
+  (let ((n-indices (gensym)))
+    `(let ((,n-indices (hsv-length (column-hsv ,col))))
+       (dotimes (,index ,n-indices)
+	 (let* ((,row-ref (aref (hsv-is (column-hsv ,col)) ,index))
+		(,row (adjvector-row-ref (lp-rows ,lp) ,row-ref)))
+	   (when (row-is-active ,row)
+	     ,@body))))))
+
+
+
+;;;; Row iteration macros
+(defmacro dorow ((lp 
+		  row
+		  &key 
+		  (visit-only-fixed nil)
+		  (visit-also-fixed nil)
+		  (visit-slack t)
+		  (col-ref (gensym)) 
+		  (index (gensym)) 
+		  (col (gensym))
+		  (a nil)
+		  (has-l nil)
+		  (has-u nil)
+		  (l nil)
+		  (u nil))
+		 &body body)
+  (let ((n (gensym))
+	(k (gensym)))
+    `(let ((,n (adjvector-fixnum-fill-pointer (row-col-refs ,row))))
+       (dotimes (,k ,n)
+	 (let* ((,col-ref (adjvector-fixnum-ref (row-col-refs ,row) ,k))
+		(,index (adjvector-fixnum-ref (row-col-indices ,row) ,k))
+		(,col (adjvector-column-ref (lp-columns ,lp) ,col-ref)))
+	   (symbol-macrolet ,(remove nil (list 
+				       (when has-l `(,has-l (column-has-l ,col)))
+				       (when has-u `(,has-u (column-has-u ,col)))
+				       (when l `(,l (column-l ,col)))
+				       (when u `(,u (column-u ,col)))))
+	     (unless ,(if visit-only-fixed
+			  `(not (column-is-active ,col))
+			  `(or ,(unless visit-also-fixed `(not (column-is-active ,col)))
+			       ,(unless visit-slack `(column-is-slack ,col))))
+	       ,@(if a
+		    `((symbol-macrolet
+			  ((,a (aref (hsv-vis (column-hsv ,col)) ,index)))
+			,@body))
+		    body))))))))
 
 
 

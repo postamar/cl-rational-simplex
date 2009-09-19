@@ -1,6 +1,32 @@
-;;;;; The big data structure macro
-;;;;;
+(in-package :rationalsimplex)
 
+;;;;; The big data structure macro file
+;;;;; Implements the definition of the following:
+;;;;; 
+;;;;; ADJUSTABLE VECTORS
+;;;;; similar to (make-array :adjustable t :fill-pointer t)
+;;;;; necessary because of SBCL's inadequate type system 
+;;;;; (I'm told SBCL maintainers' laziness and the lisp machines are to blame)
+;;;;;
+;;;;; PERSISTENT DATA STRUCTURES
+;;;;; definition macros are available for:
+;;;;; * stacks
+;;;;; * linked lists
+;;;;; * binary trees
+;;;;; * threaded binary trees
+;;;;; * splay trees
+
+
+;;;;; In the rational simplex implementation, only the
+;;;;; ADJUSTABLE VECTORS are used, liberally, and the
+;;;;; STACKS and SPLAY TREES are used, on occasion
+;;;;; Note that the hyper-sparse vector implementation
+;;;;; is similar to that of the adj. vectors.
+
+
+
+;;;; ADJUSTABLE VECTOR
+;;;; definition macro, takes desired content type as arg
 (defmacro define-adjustable-vector (type)
   (let* ((namestr (concatenate 'string "ADJVECTOR-" (princ-to-string type)))
 	 (constr (concatenate 'string "%MAKE-" namestr))
@@ -104,7 +130,11 @@
 
 
 
-
+;;;; PERSISTENT DATA STRUCTURES
+;;;; general definition macro
+;;;; takes desired name, key and value types and initializers,
+;;;; and number of pointers per element:
+;;;; for example, a binary tree needs 2, a single linked list 1, and a stack 0
 (defmacro defdatastruct (name keytype valtype npointer init-key-elt init-val-elt)
   (let ((constr (gensym))
 	(namestr (princ-to-string name))
@@ -259,8 +289,8 @@
 	 t))))
 
 
-;;;;; Helper macros
-
+;;;; Helper macro for defining a DFS tree-mapping function
+;;;; Is called only by data structure definition macros for bin trees
 (defmacro defmaptree (dsname fn ds initial-i)
   (let* ((keystr (concatenate 'string dsname "-KEY"))
 	 (valstr (concatenate 'string dsname "-VALUE"))
@@ -290,7 +320,9 @@
 	 (,dfs ,ds ,initial-i)))))
 	 
 	   
-
+;;;; Helper macro for defining a general mapping function
+;;;; Is called only by data structure definition macros for 
+;;;; something other than bin trees
 (defmacro defmap (dsname fn-firsti fn-nexti fn ds moreds)
   (let* ((dslist (append (list ds) moreds))
 	 (nds (length dslist))
@@ -342,7 +374,10 @@
 	  
     
 
-;;;; A few common data structures
+;;;; A few common data structures are henceforth implemented
+;;;; The syntax is unkind but I'm told there's no way around it
+;;;; The macroexpansions produce self-explanatory code
+
 
 (defmacro stack (&key (name "") (key-type 'fixnum) (val-type 'fixnum) (init-key-el 0) (init-val-el 0))
   (let ((namestr (if (string= "" name)
@@ -636,7 +671,13 @@
     (flet ((fname (pre app)
 	     (intern (concatenate 'string pre namestr app))))
     `(progn
-       (binary-tree :name ,namestr :key-type ,key-type :val-type ,val-type :key-equal ,key-equal :key-increasing ,key-increasing :init-key-el ,init-key-el :init-val-el ,init-val-el)
+       (binary-tree :name ,namestr 
+		    :key-type ,key-type 
+		    :val-type ,val-type 
+		    :key-equal ,key-equal 
+		    :key-increasing ,key-increasing 
+		    :init-key-el ,init-key-el 
+		    :init-val-el ,init-val-el)
        (defun ,(fname "" "-SPLAY") (,st ,key)
 	 (if (= -1 (,(fname "" "-HEADER") ,st))
 	     (values -1 nil)

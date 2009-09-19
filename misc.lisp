@@ -1,24 +1,29 @@
-;;;; Common functions and macros
+(in-package :rationalsimplex)
+
+;;;; Common functions and macros that don't belong anywhere else
 ;;;;
 
 
+;;;; if set to T, activates SLOW result-verifying checks
 (defparameter *checks* nil)
 
 
+
+;;;; Modify macros
 (defun absmax (a b)
   (max (abs a) (abs b)))
-
 (define-modify-macro absmaxf (value) absmax)
 (define-modify-macro maxf (value) max)
 (define-modify-macro minf (value) min)
 (define-modify-macro mulf (value) *)
 (define-modify-macro divf (value) /)
 (define-modify-macro ashf (value) ash)
-
 (defmacro orf (place &rest rest)
   `(setf ,place (or ,@rest ,place)))
 
 
+;;;; Performs linear search and replace in vector
+;*** Not sure if this is actually used
 (defun linear-modify (vector old-value new-value)
   (let ((len (length vector)))
     (dotimes (k len)
@@ -26,6 +31,10 @@
 	(setf (aref vector k) new-value)
 	(return t)))))
 
+
+
+;;;; Binary search in increasing-ordered vector
+;;;; returns index on success, -1 on failure
 (defun find-index (vector value)
   (declare ((array fixnum *) vector)
 	   (fixnum value))
@@ -48,6 +57,9 @@
 	       (setf l p)
 	       (setf u p))))))
 
+
+;;;; Binary search in increasing-ordered vector in range 0-nelts
+;;;; returns index on success, -1 on failure
 (defun find-index-bounded (vector nelts value) 
   (declare (optimize (speed 3) (debug 0) (safety 0)))
   (declare ((simple-array fixnum 1) vector)
@@ -72,6 +84,9 @@
 	       (setf u p))))))
 
 
+
+;;;; Binary search in increasing-ordered vector in range 0-nelts
+;;;; returns index on success, index of previous element on failure
 (defun find-closest-index-bounded (vector nelts value)
   (declare (optimize (speed 3) (debug 0) (safety 0)))
   (declare ((simple-array fixnum 1) vector)
@@ -99,6 +114,7 @@
 		      (setf u p))))))))
     
     
+;;;; Binary log rounded down of n
 (defun floor-log2 (n)
   (let ((p 0))
     (unless (< n 65536)
@@ -121,6 +137,7 @@
 	p)))
 
 
+;;;; Heap sort, increasing order, of vector in range 0-length
 (defun sort-increasing-bounded (vector length key)
   (declare ((simple-array fixnum 1) vector)
 	   ((function (fixnum) fixnum) key))
@@ -147,7 +164,7 @@
 		 (sift-down 0 (- end 1))))))
 
 
-;;;;
+;;;; In-place heap sort of key-value vector pair, increasing order
 (defun in-place-sort-keys-increasing (keys values)
   (flet ((sift-down (root end)
 	   (loop
@@ -173,7 +190,7 @@
 		   (sift-down 0 (- end 1)))))))
 
 
-;;;;
+;;;; Common denominator of rationals in vector in range 0-count
 (defun common-denominator (vector count)
   (assert (not (zerop count)))
   (let ((cd (denominator (aref vector 0))))
@@ -185,7 +202,7 @@
   
 
       
-
+;;;; Initial random state
 (defparameter *simplex-random-state*
   #S(RANDOM-STATE :STATE #.(MAKE-ARRAY 627 :ELEMENT-TYPE '(UNSIGNED-BYTE 32)
 				       :INITIAL-CONTENTS

@@ -1,22 +1,47 @@
-;;;;; BTRAN, FTRAN, etc...
+(in-package :rationalsimplex)
+
+;;;;; Forward and backward transformations
+;;;;; Used for solving systems Bx=v and xB=v respectively.
+;;;;;
+;;;;; In the forward transformation, we perform:
+;;;;; 1. FTRAN-L_F:  x" = Lf(nfactor-1)...Lf1.Lf0.v
+;;;;; 2. FTRAN-L_U:  x' = Lu(nfile-1).Lu(nfile-2)...Lu(nfactor).x"
+;;;;; 3. FTRAN-U:   U.x = x'  solved for x
+;;;;;
+;;;;; In the backward transformation, we perform:
+;;;;; 1. BTRAN-U:  x".U = v   solved for x"
+;;;;; 2. BTRAN-L-U:  x' = x".Lu(nfile-1).Lu(nfile-2)...Lu(nfactor)
+;;;;; 3. BTRAN-L-F:  x  = x'.Lf(nfactor-1)...Lf1.Lf0
+;;;;; 
+;;;;; These operations are first performed logically, so as to
+;;;;; identify fill-in and relevant eta matrices in the L and U files,
+;;;;; and then actually performed numerically.
+;;;;; 
 
 
+;;;; Data structures necessary for tran object
 (splay-tree :name hyper-sparse-vector-tree :val-type integer)
-
 (stack :name new-non-zero-stack)
 
 
-(defstruct (tran
-	     (:constructor %make-tran))
-  (hsv       (error "tran constructor") :type hsv)
-  (hsv-float (error "tran constructor") :type hsv-float)
-  (non-zeros (error "tran constructor") :type hyper-sparse-vector-tree)
-  (new-nzs   (error "tran constructor") :type new-non-zero-stack)
-  (bm        (error "tran constructor") :type basis-matrix)
-  (u-file    (error "tran constructor") :type simple-bit-vector)
-  (l-file    (error "tran constructor") :type simple-bit-vector))
+;;;; tran objects store intermediate results and keep track
+;;;; of non-zero elements and which matrices are to be visited
+(symbol-macrolet
+    ((err (error "tran constructor")))
+  (defstruct (tran
+	       (:constructor %make-tran))
+    (hsv       err :type hsv) ; intermediate result vector
+    (hsv-float err :type hsv-float) ; interm. res. in floats
+    (non-zeros err :type hyper-sparse-vector-tree) ; keeps track of fill-in in logical phase
+    (new-nzs   err :type new-non-zero-stack) ; aux. struct. used in ftran logical phase
+    (bm        err :type basis-matrix) ; basis matrix factorization
+    ;; bits are 1 if associated matrix is used, 0 if not
+    (u-file    err :type simple-bit-vector) 
+    (l-file    err :type simple-bit-vector)))
   
   
+
+;;;; Constructor
 (defun make-tran (bm)
   (%make-tran 
    :hsv       (make-hsv)
@@ -32,8 +57,7 @@
 
 
 
-;;;;; Hyper-sparse vector functions
-
+;;;;; Hyper-sparse vector tree, element presence test
 (defun is-hsvt-component-non-zero (hsvt index)
   (multiple-value-bind (hsvt-index there)
       (hyper-sparse-vector-tree-find-key hsvt index)
@@ -41,6 +65,11 @@
     there))
 	     
 
+;;;; Macro used to visit result vector and L-eta column elements step by step
+;;;; * pivot-fun is called on the non-zero result vector element which pivots
+;;;; * other-fun is called on the non-zero result vector 
+;;;;   and eta column vector elements which interact but are not pivot
+;;;; * scale-fun is called on all other non-zero result vector elements
 (defmacro do-hsv-l (pivot-fun other-fun scale-fun v eta-l pivot-i)
   (let ((k1 (gensym))
 	(k2 (gensym))
@@ -92,6 +121,9 @@
 		(return))))))))
 
 
+
+;;;; Macro used to visit result vector and U-eta column elements step by step
+;;;; Same as do-hsv-l, but permutations have to be taken into account
 (defmacro do-hsv-u (pivot-fun other-fun scale-fun v eta-u u-seq i->pi)
   (let ((k1 (gensym))
 	(k2 (gensym))
@@ -145,7 +177,7 @@
 
 ;;;;; TRAN functions
 
-;;;;
+;;;; Initializes logical phase
 (defun tran-prepare-non-zero (tr)
     ;; reset non-zero vector and files 
     (bit-xor (tran-u-file tr) (tran-u-file tr) t)
@@ -154,7 +186,7 @@
     (reset-new-non-zero-stack (tran-new-nzs tr)))
 
 
-;;;;
+;;;; Initializes result vector after logical phase
 (defun tran-prepare-fill-in (tr)
   ;; reset result vector
   (setf (hsv-length (tran-hsv tr)) 0)
@@ -165,16 +197,17 @@
    (tran-non-zeros tr)))
 
 
-;;;;
+;;;; Permutes indices in result vector 
 (defun tran-permutation (tr perm)
   (dotimes (k (hsv-length (tran-hsv tr)))
     (let ((perm-ind (aref perm (aref (hsv-is (tran-hsv tr)) k))))
       (setf (aref (hsv-is (tran-hsv tr)) k) perm-ind))))
 
 
+
 ;;;;; BTRAN functions 
 
-;;;;
+;;;; Returns NIL if residual is known to be zero for this U-eta matrix
 (defun is-btran-u-residual-non-zero (tr eta-u u-seq i->pi)
   (let ((eta-k 0)
 	(max-eta-k (hsv-length eta-u)))
@@ -202,6 +235,7 @@
   
 
 
+;;;; Returns NIL if residual is known to be zero for this L-eta matrix
 (defun is-btran-l-residual-non-zero (tr eta-l)
   (let ((eta-k 0)
 	(max-eta-k (hsv-length eta-l)))
@@ -223,7 +257,8 @@
     nil))
 
 
-;;;;
+
+;;;; Logical phase for BTRAN-U
 (defun btran-u-non-zero (tr)
   (let* ((bm (tran-bm tr))
 	 (m (basis-matrix-size bm))
@@ -244,7 +279,7 @@
 
 
 
-;;;; 
+;;;; Logical phase for BTRAN-L-F
 (defun btran-l-f-non-zero (tr)
   (let* ((bm (tran-bm tr))
 	 (hsv-nz (tran-non-zeros tr)))
@@ -257,7 +292,7 @@
 		(hyper-sparse-vector-tree-set hsv-nz pivot-i 0)))))))
 
 
-;;;;
+;;;; Logical phase for BTRAN-L-U
 (defun btran-l-u-non-zero (tr)
   (let* ((bm (tran-bm tr))
 	 (hsv-nz (tran-non-zeros tr)))
@@ -271,7 +306,8 @@
 
 
 
-;;;;
+;;;; Solves x.Uj = x' for x
+;;;; This function is performance-critical
 (defun btran-solve-eta (tr eta u-seq)
   (declare (optimize (speed 1) (safety 0) (debug 0)))
   (declare ((simple-array fixnum 1) u-seq))
@@ -314,7 +350,10 @@
 		  new-d-fact))))))
 	     
 
-;;;;
+
+
+;;;; Computes x = x'.Lu  or x = x'.Lf
+;;;; This function is performance-critical
 (defun btran-multiply-eta (tr eta pivot-i)
   (declare (optimize (speed 1) (safety 0) (debug 0)))
   (declare (fixnum pivot-i))
@@ -354,7 +393,7 @@
 
 
 
-;;;;
+;;;; Numerical phase of BTRAN-U
 (defun btran-u-fill-in (tr)
   (let* ((bm (tran-bm tr))
 	 (pj->j (basis-matrix-pj->j bm))
@@ -367,7 +406,8 @@
 			   (aref (basis-matrix-u-seqs bm) j)))))))
 
 
-;;;;
+
+;;;; Numerical phase of BTRAN-L-F
 (defun btran-l-f-fill-in (tr)
   (let ((bm (tran-bm tr)))
     (loop for k from (- (basis-matrix-n-l-factor-file bm) 1) downto 0
@@ -377,7 +417,7 @@
 				(aref (basis-matrix-l-pivot-file bm) k))))))
 
 
-;;;;
+;;;; Numerical phase of BTRAN-L-U
 (defun btran-l-u-fill-in (tr)
   (let ((bm (tran-bm tr)))
     (loop for k from (- (basis-matrix-n-l-file bm) 1) 
@@ -388,7 +428,8 @@
 			       (aref (basis-matrix-l-pivot-file bm) k))))))
 
 
-;;;;
+
+;;;; Logical and numerical phases of BTRAN-U combined
 (defun btran-u (tr rhs)
   (let* ((init-n-nz (hsv-length rhs))
 	 (hsv-nz (tran-non-zeros tr))
@@ -408,7 +449,7 @@
     (hsv-sort-indices-increasing (tran-hsv tr))))
 
 
-;;;;
+;;;; Logical and numerical phases of BTRAN-L-F and BTRAN-L-U combined
 (defun btran-l (tr rhs)
   (tran-prepare-non-zero tr)
   (let* ((init-n-nz (hsv-length rhs))
@@ -427,6 +468,8 @@
 
 
 
+;;;; Checks result of BTRAN-U
+;;;; This function is for debugging purposes
 (defun check-btran-u (tr rhs)
   (when *checks*
     (let* ((bm (tran-bm tr))
@@ -469,8 +512,9 @@
       (dotimes (i m t)
 	(assert (= (aref vt i) (aref vs i)))))))
 
+
   
-;;;;
+;;;; This brings all backward transformation together
 (defun btran (tr rhs)
   (btran-u tr rhs)
   (hsv-remove-zeros (tran-hsv tr))
@@ -480,15 +524,14 @@
   (hsv-remove-zeros (tran-hsv tr))
   (hsv-normalize (tran-hsv tr)))
     
-    
-  
-
 	      
 
 
 ;;;;; FTRAN functions	  
 
-;;;;
+
+;;;; Logical phase of solving Uj.x = x'
+;;;; identifies sites of future fill-in and adds them to non-zero HSV tree
 (defun find-ftran-u-non-zeros (tr eta-u u-seq)
   (let ((hsv-nz (tran-non-zeros tr))
 	(i->pi (basis-matrix-i->pi (tran-bm tr)))
@@ -533,7 +576,8 @@
 
 
 
-;;;;
+;;;; Logical phase of computing  x = Lu.x'  or  x = Lf.x'
+;;;; identifies sites of future fill-in and adds them to non-zero HSV tree
 (defun find-ftran-l-non-zeros (tr eta-l)
   (let ((hsv-nz (tran-non-zeros tr))
 	(eta-k 0)
@@ -569,7 +613,7 @@
 
 
 
-;;;;
+;;;; Logical phase of FTRAN-L-F
 (defun ftran-l-f-non-zero (tr)
   (let* ((bm (tran-bm tr))
 	 (hsv-nz (tran-non-zeros tr)))
@@ -583,7 +627,7 @@
 
 
 
-;;;;
+;;;; Logical phase of FTRAN-L-U
 (defun ftran-l-u-non-zero (tr)
   (let* ((bm (tran-bm tr))
 	 (hsv-nz (tran-non-zeros tr)))
@@ -597,7 +641,8 @@
 		  (hyper-sparse-vector-tree-set hsv-nz pivot-i 0)))))))
 
 
-;;;;
+
+;;;; Logical phase of FTRAN-U
 (defun ftran-u-non-zero (tr)
   (let* ((bm (tran-bm tr))
 	 (pj->j (basis-matrix-pj->j bm))
@@ -613,8 +658,8 @@
 
 
 
-
-;;;;
+;;;; Computes  x = Lu.x'  or  x = Lf.x'
+;;;; This function is performance-critical
 (defun ftran-multiply-eta (tr eta eta-pivot-i)
   (declare (optimize (speed 1) (debug 0) (safety 0)))
   (declare (fixnum eta-pivot-i))
@@ -647,12 +692,11 @@
       (tran-hsv tr)
       eta
       eta-pivot-i)))
-      
 			    
 
 
-
-;;;;
+;;;; Solves  Uj.x = x'  for x
+;;;; This function is performance-critical
 (defun ftran-solve-eta (tr eta-u u-seq)
   (declare (optimize (speed 1) (debug 0) (safety 0)))
   (declare ((simple-array fixnum 1) u-seq))
@@ -699,7 +743,7 @@
 
 
 
-;;;;
+;;;; Numerical phase of FTRAN-L-U
 (defun ftran-l-u-fill-in (tr)
   (let ((bm (tran-bm tr)))
     (loop for k from (basis-matrix-n-l-factor-file bm)
@@ -709,7 +753,9 @@
 				(aref (basis-matrix-l-file bm) k)
 				(aref (basis-matrix-l-pivot-file bm) k))))))
 
-;;;;
+
+
+;;;; Numerical phase of FTRAN-L-F
 (defun ftran-l-f-fill-in (tr)
   (let ((bm (tran-bm tr)))
     (dotimes (k (basis-matrix-n-l-factor-file bm))
@@ -719,7 +765,8 @@
 			       (aref (basis-matrix-l-pivot-file bm) k))))))
 
 
-;;;;
+
+;;;; Numerical phase of FTRAN-U
 (defun ftran-u-fill-in (tr)
   (let* ((bm (tran-bm tr))
 	 (pj->j (basis-matrix-pj->j bm))
@@ -733,7 +780,7 @@
 
 
 
-;;;;
+;;;; Logical and numerical phases of FTRAN-U combined
 (defun ftran-u (tr rhs)
   (let* ((init-n-nz (hsv-length rhs))
 	 (hsv-nz (tran-non-zeros tr))
@@ -754,7 +801,7 @@
   
 
 
-;;;;
+;;;; Logical and numerical phases of FTRAN-L-F and FTRAN-L-U combined
 (defun ftran-l (tr rhs)
   (tran-prepare-non-zero tr)
   (let* ((init-n-nz (hsv-length rhs))
@@ -774,6 +821,8 @@
 
 
 
+;;;; Checks result of FTRAN-U
+;;;; This function is for debugging purposes
 (defun check-ftran-u (tr rhs)
   (when *checks*
     (let* ((bm (tran-bm tr))
@@ -813,7 +862,8 @@
 	(assert (= (aref vt i) (aref vs i)))))))
 
 
-;;;;
+
+;;;; This brings all forward transformation together
 (defun ftran (tr v)
   (ftran-l tr v)
   (hsv-remove-zeros (tran-hsv tr))
@@ -827,5 +877,94 @@
   (hsv-remove-zeros (tran-hsv tr))
   (hsv-normalize (tran-hsv tr)))
 
+
+
+
+;;;;; DEBUGGING 
+
+
+;;;; Checks result of backwards transformation
+(defun check-btran (b lp tr rhs)
+  (when *checks*
+    (let* ((db (make-dense-basis lp (basis-matrix b) (basis-header b)))
+	   (m (basis-matrix-size (basis-matrix b)))
+	   (vs (make-array m :initial-element 0 :element-type 'rational))
+	   (vr (make-array m :initial-element 0 :element-type 'rational))
+	   (vt (make-array m :initial-element 0 :element-type 'rational)))
+      (dotimes (k (hsv-length rhs))
+	(let ((i (aref (hsv-is rhs) k)))
+	  (setf (aref vs i) (* (hsv-coef rhs)
+			       (aref (hsv-vis rhs) k)))))
+      (dotimes (k (hsv-length (tran-hsv tr)))
+	(setf (aref vr (aref (hsv-is (tran-hsv tr)) k))
+	      (* (hsv-coef (tran-hsv tr)) (aref (hsv-vis (tran-hsv tr)) k))))
+      (dotimes (j m)
+	(dotimes (i m)
+	  (incf (aref vt j)
+		(* (aref vr i)
+		   (aref db i j)))))
+      (unless (equalp vt vs)
+	(print vt)
+	(print vs))
+      (assert (equalp vt vs)))))
+
+
+
+;;;; Checks result of forward transformation
+(defun check-ftran (b lp tr rhs)
+  (when *checks*
+    (let* ((db (make-dense-basis lp (basis-matrix b) (basis-header b)))
+	   (m (basis-matrix-size (basis-matrix b)))
+	   (vs (make-array m :initial-element 0 :element-type 'rational))
+	   (vr (make-array m :initial-element 0 :element-type 'rational))
+	   (vt (make-array m :initial-element 0 :element-type 'rational)))
+      (dotimes (k (hsv-length rhs))
+	(let ((i (aref (hsv-is rhs) k)))
+	  (setf (aref vs i) (* (hsv-coef rhs)
+			       (aref (hsv-vis rhs) k)))))
+      (dotimes (k (hsv-length (tran-hsv tr)))
+	(setf (aref vr (aref (hsv-is (tran-hsv tr)) k))
+	      (* (hsv-coef (tran-hsv tr)) (aref (hsv-vis (tran-hsv tr)) k))))
+      (dotimes (i m)
+	(dotimes (j m)
+	  (incf (aref vt i)
+		(* (aref vr j)
+		   (aref db i j)))))
+					;    (print (list vr db vt vs))
+      (dotimes (i m t)
+	(assert (= (aref vt i) (aref vs i)))))))
+  
+
+
+;;;;; More misc. debugging functions
+
+(defun btran-l-dense (bm hsv-vu)
+  (let* ((m (basis-matrix-size bm))
+	 (v (make-array m :element-type 'rational :initial-element 0)))
+    ;; fill v
+    (dotimes (k (hsv-length hsv-vu))
+      (setf (aref v (aref (hsv-is hsv-vu) k))
+	    (* (hsv-coef hsv-vu) (aref (hsv-vis hsv-vu) k))))
+    ;; right-multiply by l
+    (loop for k from (- (basis-matrix-n-l-file bm) 1) downto 0
+       do (let* ((l (aref (basis-matrix-l-file bm) k))
+		 (i (aref (basis-matrix-l-pivot-file bm) k))
+		 (sum 0))
+	    (assert (= i (aref (hsv-is l) 0)))
+	    (dotimes (kk (hsv-length l))
+	      (incf sum (* (aref v (aref (hsv-is l) kk))
+			   (aref (hsv-vis l) kk))))
+	    (mulf sum (hsv-coef l))
+	    (setf (aref v i) sum)))
+    v))
+	
+
+(defun check-btran-l (hsv-result correct)
+  (let* ((m (length correct))
+	 (result (make-array m :element-type 'rational :initial-element 0)))
+    (dotimes (k (hsv-length hsv-result))
+      (setf (aref result (aref (hsv-is hsv-result) k))
+	    (* (hsv-coef hsv-result) (aref (hsv-vis hsv-result) k))))
+    (assert (equalp result correct))))
 
 
