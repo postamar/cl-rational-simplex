@@ -148,7 +148,7 @@
 
 
 ;;;;
-(defun dual-simplex (sd &key (min-z) (max-z) (cutoff))
+(defun dual-simplex (sd &key (min-z) (max-z) (cutoff) (phase1only nil))
   (symbol-macrolet 
       ((b (simplex-basis sd))
        (z (basis-obj-value (simplex-basis sd))))
@@ -172,6 +172,8 @@
 		  (return-from dual-simplex status)))))
       ;; phase 2
       (check-dual-feasability sd)
+      (when phase1only
+	(return-from dual-simplex 'dual-feasible))
       (print 'phase2)
       (simplex-prepare-phase2 sd)
       (check-dual-feasability sd)

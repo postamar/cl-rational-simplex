@@ -15,11 +15,13 @@
   (singular-ref  -1  :type fixnum)
   (refs          #() :type vector)
   (flags         #() :type vector)
-  (spikes        #() :type vector)
   (l-file        #() :type vector)
-  (u-columns     #() :type vector)
-  (u-file        #() :type vector)
+  (lf-file       #() :type vector)
   (n-l-file      0   :type fixnum)
+  (u-columns     #() :type vector)
+  (uf-columns    #() :type vector)
+  (u-seqs        #() :type vector)
+  (fill-ins      #() :type vector)
   (col-is        #() :type vector)
   (col-nnz       #() :type vector)
   (row-js        #() :type vector)
@@ -45,10 +47,12 @@
 	    :size          m
 	    :refs          (make-nvector m -1 fixnum)
 	    :flags         (make-nvector m nil boolean)
-	    :spikes        (make-nvector m -1 fixnum)
-	    :l-file        (make-nvector m (make-lu-eta-matrix) lu-eta-matrix)
-	    :u-columns     (make-nvector m (make-lu-eta-matrix) lu-eta-matrix)
-	    :u-file        (make-nvector m (make-lu-eta-matrix) lu-eta-matrix)
+	    :l-file        (make-nvector m (make-hsv) hsv)
+	    :u-columns     (make-nvector m (make-hsv) hsv)
+	    :lf-file       (make-nvector m (make-hsv-float) hsv-float)
+	    :uf-columns    (make-nvector m (make-hsv-float) hsv-float)
+	    :u-seqs        (make-nvector m #() vector)
+	    :fill-ins      (make-nvector m 0 fixnum)
 	    :col-nnz       (make-nvector m 0 fixnum)
 	    :row-nnz       (make-nvector m 0 fixnum)
 	    :col-is        (make-nvector m #() vector)
@@ -63,12 +67,14 @@
 	    :pj->j         (make-nvector m -1 fixnum)
 	    :pi->i         (make-nvector m -1 fixnum))))
     (dotimes (k m)
-      (setf (aref (basis-matrix-u-columns bm) k) (make-lu-eta-matrix)
-	    (aref (basis-matrix-l-file bm) k)    (make-lu-eta-matrix)
-	    (aref (basis-matrix-u-file bm) k)    (make-lu-eta-matrix)
-	    (aref (basis-matrix-col-is bm) k)    (make-vector fixnum)
-	    (aref (basis-matrix-row-js bm) k)    (make-vector fixnum)
-	    (aref (basis-matrix-row-cis bm) k)   (make-vector fixnum)))
+      (setf (aref (basis-matrix-u-columns bm) k)  (make-hsv)
+	    (aref (basis-matrix-l-file bm) k)     (make-hsv)
+	    (aref (basis-matrix-uf-columns bm) k) (make-hsv-float)
+	    (aref (basis-matrix-lf-file bm) k)    (make-hsv-float)
+	    (aref (basis-matrix-u-seqs bm) k)     (make-nvector m 0 fixnum)
+	    (aref (basis-matrix-col-is bm) k)     (make-vector fixnum)
+	    (aref (basis-matrix-row-js bm) k)     (make-vector fixnum)
+	    (aref (basis-matrix-row-cis bm) k)    (make-vector fixnum)))
     bm))
 
 
@@ -76,15 +82,13 @@
 ;;;; Resets basis	 
 (defun reset-basis-matrix (bm)
   (dotimes (k (basis-matrix-n-l-file bm))
-    (reset-lu-eta-matrix (aref (basis-matrix-l-file bm) k)))
+    (reset-hsv-float (aref (basis-matrix-lf-file bm) k))
+    (reset-hsv (aref (basis-matrix-l-file bm) k)))
   (let ((m (basis-matrix-size bm)))
-    (dotimes (k m)
-      (reset-lu-eta-matrix (aref (basis-matrix-u-file bm) k)))
     (setf (basis-matrix-is-singular bm) nil
 	  (basis-matrix-singular-ref bm) -1
 	  (fill-pointer (basis-matrix-refs bm)) m
 	  (fill-pointer (basis-matrix-flags bm)) m
-	  (fill-pointer (basis-matrix-spikes bm)) m
 	  (fill-pointer (basis-matrix-col-is bm)) m
 	  (fill-pointer (basis-matrix-col-nnz bm)) m
 	  (fill-pointer (basis-matrix-row-js bm)) m
@@ -105,17 +109,21 @@
       (setf (fill-pointer (aref (basis-matrix-row-js bm) k)) 0
 	    (fill-pointer (aref (basis-matrix-row-cis bm) k)) 0
 	    (fill-pointer (aref (basis-matrix-col-is bm) k)) 0
+	    (fill-pointer (aref (basis-matrix-u-seqs bm) k)) 0
+	    (aref (basis-matrix-fill-ins bm) k) 0
 	    (aref (basis-matrix-refs bm) k) k
-	    (aref (basis-matrix-spikes bm) k) m
 	    (aref (basis-matrix-col-nnz bm) k) 0
 	    (aref (basis-matrix-row-nnz bm) k) 0
 	    (aref (basis-matrix-i->pi bm) k) k
 	    (aref (basis-matrix-pi->i bm) k) k
 	    (aref (basis-matrix-j->pj bm) k) k
 	    (aref (basis-matrix-pj->j bm) k) k)
-      (let ((u_k (aref (basis-matrix-u-columns bm) k)))
-	(setf (lu-eta-matrix-j u_k) k)
-	(reset-lu-eta-matrix u_k)))))
+      (let ((u_k (aref (basis-matrix-u-columns bm) k))
+	    (uf_k (aref (basis-matrix-uf-columns bm) k)))
+	(reset-hsv u_k)
+	(reset-hsv-float uf_k)
+	(setf (hsv-j u_k) k
+	      (hsv-float-j uf_k) k)))))
 
 
 
@@ -139,57 +147,4 @@
 	  (format t "   .   ")
 	  (format t "~6,2F " (float (aref a i j)))))))
 
-#|
-(defun print-basis-matrix-l (b)
-  (let* ((m (basis-matrix-size b))
-	 (j->pj (basis-matrix-j->pj b))
-	 (i->pi (basis-matrix-i->pi b))
-	 (a (make-array (list m m) :initial-element 0 :element-type 'rational)))
-    (dotimes (j m)
-      (let* ((l_j  (aref (basis-matrix-l-columns b) j))
-	     (is   (lu-eta-matrix-is l_j))
-	     (vis  (lu-eta-matrix-vis l_j))
-	     (n-nz (length is))
-	     (f    (lu-eta-matrix-coef l_j)))
-	(dotimes (k n-nz)
-	  (setf (aref a (aref i->pi (aref is k)) (aref j->pj j)) (* f (aref vis k))))))
-    (print-2d-array a)))
-
-(defun print-basis-matrix-u (b)
-  (let* ((m (basis-matrix-size b))
-	 (j->pj (basis-matrix-j->pj b))
-	 (i->pi (basis-matrix-i->pi b))
-	 (a (make-array (list m m) :initial-element 0 :element-type 'rational)))
-    (dotimes (k m)
-      (setf (aref a k k) 1))
-    (dotimes (k (length (basis-matrix-u-columns b)))
-      (let* ((u    (aref (basis-matrix-u-columns b) k))
-	     (j    (lu-eta-matrix-j u))
-	     (is   (lu-eta-matrix-is u))
-	     (vis  (lu-eta-matrix-vis u))
-	     (n-nz (length is))
-	     (f    (lu-eta-matrix-coef u)))
-	(dotimes (r n-nz)
-	  (setf (aref a (aref i->pi (aref is r)) (aref j->pj j)) (* f (aref vis r))))))
-    (print-2d-array a)))
-	
-(defun print-basis-nz (b)
-  (let* ((m (basis-matrix-size b))
-	 (j->pj (basis-matrix-j->pj b))
-	 (i->pi (basis-matrix-i->pi b))
-	 (a (make-array (list m m) :initial-element 0 :element-type 'rational)))
-    (dotimes (j m)
-      (let* ((l_j  (aref (basis-matrix-l-columns b) j))
-	     (is   (lu-eta-matrix-is l_j))
-	     (vis  (lu-eta-matrix-vis l_j))
-	     (n-nz (length is))
-	     (f    (lu-eta-matrix-coef l_j)))
-	(dotimes (k n-nz)
-	  (setf (aref a (aref i->pi (aref is k)) (aref j->pj j)) (* f (aref vis k))))))
-    (dotimes (i (array-dimension a 0) (format t "~%"))
-      (dotimes (j (array-dimension a 1) (format t "~%"))
-	(if (zerop (aref a i j))
-	    (format t " .")
-	    (format t " x"))))))
-  |#    
 

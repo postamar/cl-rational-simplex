@@ -6,6 +6,7 @@
   (lp               nil :type lp)
   (basis            nil :type basis)
   (tran             nil :type tran)
+  (dse-tran         nil :type tran)
   (vector-coef      1   :type rational)
   (vector-indices   #() :type vector)
   (vector-values    #() :type vector)
@@ -15,8 +16,8 @@
   (pivot-row-index  -1  :type fixnum)
   (pivot-col-ref    -1  :type fixnum)
   (delta            0   :type rational)
-  (ratio-d          0   :type rational)
-  (ratio-p          0   :type rational)
+  (dual-step        0   :type rational)
+  (primal-step      0   :type rational)
   (flip-col-indices #() :type vector))
 
 
@@ -27,6 +28,7 @@
      :lp               lp
      :basis            basis
      :tran             (make-tran (basis-matrix basis))
+     :dse-tran             (make-tran (basis-matrix basis))
      :vector-indices   (make-nvector m -1 fixnum)
      :vector-values    (make-nvector m 0 integer)
      :pivot-row        (make-nvector n 0 rational)
@@ -43,8 +45,8 @@
 	(simplex-pivot-row-index sd) -1
 	(simplex-pivot-col-ref sd) -1
 	(simplex-delta sd) 0
-	(simplex-ratio-d sd) 0
-	(simplex-ratio-p sd) 0
+	(simplex-dual-step sd) 0
+	(simplex-primal-step sd) 0
 	(fill-pointer (simplex-flip-col-indices sd)) 0)
   (bit-xor (simplex-breakpoints sd) (simplex-breakpoints sd) t)
   (let ((n (length (simplex-pivot-row sd))))
@@ -114,33 +116,19 @@
 	 (simplex-vector-values sd)))
 
 
-(defun check-pivot-row (sd)
-  (let* ((lp (simplex-lp sd))
-	 (b (simplex-basis sd))
-	 (m (basis-matrix-size (basis-matrix b)))
-	 (vc (make-nvector m 0 rational))
-	 (flags (basis-column-flags b)))
-    (dotimes (j (length flags))
-      (let* ((col (aref (lp-columns lp) j))
-	     (flag (aref flags j))
-	     (x 0))
-	(when (or (eq flag 'nonbasic-lower-bound)
-		  (eq flag 'nonbasic-upper-bound))
-	  (dotimes (i m)
-	    (setf (aref vc i) 0))
-	  (dotimes (k (length (column-row-refs col)))
-	    (let* ((row-ref (aref (column-row-refs col) k))
-		   (row-ind (aref (lp-active-row-inds lp) row-ref)))
-	      (unless (= -1 row-ind)
-		(setf (aref vc row-ind)
-		      (aref (column-values col) k)))))
-	  (dotimes (k (length (simplex-vector-indices sd)))
-	    (let* ((row-index (aref (simplex-vector-indices sd) k))
-		   (row-value (aref (simplex-vector-values sd) k)))
-	      (incf x (* (aref vc row-index) row-value))))
-	  (mulf x (column-coef col))
-	  (mulf x (simplex-vector-coef sd))
-	  (assert (= x (aref (simplex-pivot-row sd) j))))))))
+;;;;
+(defun simplex-dse-ftran (sd)
+  (ftran (simplex-dse-tran sd)
+	 (basis-matrix-i->pi (basis-matrix (simplex-basis sd)))
+	 (basis-matrix-j->pj (basis-matrix (simplex-basis sd)))
+	 (basis-matrix-pi->i (basis-matrix (simplex-basis sd)))
+	 (basis-matrix-pj->j (basis-matrix (simplex-basis sd)))
+	 (tran-coef (simplex-tran sd))
+	 (tran-indices (simplex-tran sd))
+	 (tran-values (simplex-tran sd))))
+
+
+
 
 
 
@@ -203,7 +191,7 @@
 	  (setf (bit (simplex-breakpoints sd) j) 1)
 	  (incf (simplex-n-breakpoints sd)))))
     (unless (= -1 (simplex-pivot-col-ref sd))
-      (setf (simplex-ratio-d sd) 
+      (setf (simplex-dual-step sd) 
 	    (/ (aref (basis-reduced-costs b) (simplex-pivot-col-ref sd))
 	       (aref (simplex-pivot-row sd) (simplex-pivot-col-ref sd)))))
     (simplex-pivot-col-ref sd)))
@@ -279,7 +267,56 @@
 	     (error "bad exiting variable value or reduced cost in phase 2")))))
 
 
-	
+
+;;;; 
+(defun simplex-basis-update-primal (sd)
+  (let* ((b (simplex-basis sd))
+	 (dse-tr (simplex-dse-tran sd))
+	 (exit-row (simplex-pivot-row-index sd))
+	 (exit-row-weight (aref (basis-dse-weights b) exit-row))
+	 (primal-values (basis-primal-values b))
+	 (alpha-index (find-index (simplex-vector-indices sd) exit-row)))
+    (assert (/= -1 alpha-index))
+    (assert (/= 0 (aref (simplex-vector-values sd) alpha-index)))
+    ;; compute primal step
+    (setf (simplex-primal-step sd)
+	  (/ (simplex-delta sd)
+	     (* (aref (simplex-vector-values sd) alpha-index)
+		(simplex-vector-coef sd))))
+    (dotimes (k (length (simplex-vector-indices sd)))
+      (let ((i (aref (simplex-vector-indices sd) k)))
+	;; update basic primal values
+	(decf (aref primal-values i) 
+	      (* (simplex-primal-step sd)
+		 (simplex-vector-coef sd)
+		 (aref (simplex-vector-values sd) k)))
+	;; update dse weights
+	(if (= k alpha-index)
+	    (let ((d (* (simplex-vector-coef sd)
+			(aref (simplex-vector-values sd) alpha-index))))
+	      (assert (= exit-row-weight (aref (basis-dse-weights b) exit-row)))
+	      (divf (aref (basis-dse-weights b) exit-row) (* d d)))
+	    (let ((ratio (/ (aref (simplex-vector-values sd) k)
+			    (aref (simplex-vector-values sd) alpha-index)))
+		  (tau-index (find-index (tran-indices dse-tr) i)))
+	      (unless (= -1 tau-index)
+		(decf (aref (basis-dse-weights b) i)
+		      (* 2 ratio 
+			 (tran-coef dse-tr) 
+			 (aref (tran-values dse-tr) tau-index))))
+	      (incf (aref (basis-dse-weights b) i)
+		    (* ratio ratio exit-row-weight))))))))
+
+
+
+;;;;
+(defun simplex-basis-matrix-update (sd)
+  (let* ((b (simplex-basis sd))
+	 (lp (simplex-lp sd))
+	 (bm (basis-matrix b)))
+    (basis-matrix-lu-decomposition bm)
+    (lu-check lp bm (basis-header b))))
+  
 
 
 ;;;;	     
@@ -294,29 +331,16 @@
 	 (primal-values (basis-primal-values b))
 	 (flags (basis-column-flags b))
 	 (rcosts (basis-reduced-costs b)))
-    ;; compute primal step
-    (let ((k (find-index (simplex-vector-indices sd) exit-row)))
-      (assert (/= -1 k))
-      (assert (/= 0 (aref (simplex-vector-values sd) k)))
-      (setf (simplex-ratio-p sd)
-	    (/ (simplex-delta sd)
-	       (* (aref (simplex-vector-values sd) k)
-		  (simplex-vector-coef sd)))))
-    ;; update basic primal values
-    (dotimes (k (length (simplex-vector-indices sd)))
-      (let ((i (aref (simplex-vector-indices sd) k)))
-	(decf (aref primal-values i) 
-	      (* (simplex-ratio-p sd)
-		 (simplex-vector-coef sd)
-		 (aref (simplex-vector-values sd) k)))))
+    ;; compute primal step, update primal basic values, update dse weights
+    (simplex-basis-update-primal sd)
     ;; update reduced costs
-    (setf (aref rcosts exit-col-ref) (- (simplex-ratio-d sd)))
+    (setf (aref rcosts exit-col-ref) (- (simplex-dual-step sd)))
     (dotimes (j n)
       (let ((flag (aref flags j)))
 	(when (or (eq flag 'nonbasic-lower-bound)
 		  (eq flag 'nonbasic-upper-bound))
 	  (decf (aref rcosts j)
-		(* (simplex-ratio-d sd) 
+		(* (simplex-dual-step sd) 
 		   (aref (simplex-pivot-row sd) j))))))
     ;; update exiting variable
     (setf (aref flags exit-col-ref)
@@ -327,20 +351,18 @@
     ;; update entering variable
     (setf (aref header exit-row) q)
     (setf (aref primal-values exit-row) 
-	  (+ (simplex-ratio-p sd)
+	  (+ (simplex-primal-step sd)
 	     (nonbasic-value (basis-in-phase1 b)
 			     (aref (lp-columns lp) q)
 			     (aref flags q))))
     (setf (aref flags q) 'basic)
     ;; update objective
     (incf (basis-obj-value b)
-	  (* (simplex-ratio-d sd)
+	  (* (simplex-dual-step sd)
 	     (simplex-delta sd)))
     ;; update basis matrix
     (fill-basis-matrix (basis-matrix b) lp header)
-    (basis-matrix-lu-decomposition (basis-matrix b))
-    (check-reduced-costs sd)
-    (lu-check lp (basis-matrix b) (basis-header b))))
+    (simplex-basis-matrix-update sd)))
 
 
 
@@ -364,7 +386,8 @@
   ;; ratio test
   (when (= -1 (choose-entering-basis-index sd))
     (return-from simplex-iteration 'infeasible))
-  ;; ftran
+  ;; ftrans
+  (simplex-dse-ftran sd)
   (set-entering-column-as-simplex-vector sd)
   (simplex-ftran sd)
   (check-ftran sd)

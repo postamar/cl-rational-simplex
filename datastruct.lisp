@@ -1,6 +1,7 @@
 ;;;;; The big data structure macro
 ;;;;;
 
+
 (defmacro defdatastruct (name keytype valtype npointer) 
   (let ((constr (gensym))
 	(namestr (princ-to-string name))
@@ -48,18 +49,26 @@
 				       (adjv 'fixnum))))
 	    :garbage  ,(adjv 'fixnum)
 	    :header   -1))
+	 (declaim (inline ,(fname "" "-VALUE")))
 	 (defun ,(fname "" "-VALUE") (,ds ,i)
 	   (aref ( ,(fname "" "-VALUES") ,ds) ,i))
+	 (declaim (inline ,(fname "" "-KEY")))
 	 (defun ,(fname "" "-KEY") (,ds ,i)
 	   (aref ( ,(fname "" "-KEYS") ,ds) ,i))
+	 ,@(loop for k from 1 upto npointer
+	      collect `(declaim (inline ,(accname k))))
 	 ,@(loop for k from 1 upto npointer
 	      collect `(defun ,(accname k)
 			   (,ds ,i)
 			 (aref (,(slotname k) ,ds) ,i)))
+	 (declaim (inline ,(fname "SET-" "-VALUE")))
 	 (defun ,(fname "SET-" "-VALUE") (,ds ,i ,val)
 	   (setf (aref ( ,(fname "" "-VALUES") ,ds) ,i) ,val))
+	 (declaim (inline ,(fname "SET-" "-KEY")))
 	 (defun ,(fname "SET-" "-KEY") (,ds ,i ,key)
 	   (setf (aref ( ,(fname "" "-KEYS") ,ds) ,i) ,key))
+	 ,@(loop for k from 1 upto npointer
+	      collect `(declaim (inline ,(setname k))))
 	 ,@(loop for k from 1 upto npointer
 	      collect `(defun ,(setname k) (,ds ,i ,ptr)
 			 (setf (aref (,(slotname k) ,ds) ,i) ,ptr)))
@@ -80,12 +89,15 @@
 		       (aref (,(fname "" "-KEYS") ,ds) ,i) ,key
 		       (aref (,(fname "" "-VALUES") ,ds) ,i) ,val)
 		 ,i)))
+	 (declaim (inline ,(fname "REMOVE-IN-" "")))
 	 (defun ,(fname "REMOVE-IN-" "") (,ds ,i)
 	   (vector-push-extend ,i (,(fname "" "-GARBAGE") ,ds))
 	   ,i)
+	 (declaim (inline ,(fname "" "-COUNT")))
 	 (defun ,(fname "" "-COUNT") (,ds)
 	   (- (fill-pointer (,(fname "" "-KEYS") ,ds))
 	      (fill-pointer (,(fname "" "-GARBAGE") ,ds))))
+	 (declaim (inline ,(fname "RESET-" "")))
 	 (defun ,(fname "RESET-" "") (,ds)
 	   (setf (fill-pointer (,(fname "" "-KEYS") ,ds)) 0
 		 (fill-pointer (,(fname "" "-VALUES") ,ds)) 0
