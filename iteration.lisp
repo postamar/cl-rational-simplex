@@ -147,6 +147,7 @@
 	
 
 
+
 ;;;; Given a dual-feasible basis, prepares phase 2 of the simplex algorithm
 (defun simplex-prepare-phase2 (sd)
   (let* ((b (simplex-basis sd))
@@ -220,13 +221,14 @@
 	 (z (basis-obj-value (simplex-basis sd))))
       (macrolet 
 	  ((print-z ()
-	     `(format t "it. ~A:  z = ~A~%"
+	     `(format t "~&    ~12,D        ~16,5F~%"
 		      (stats-total-iters st)
 		      (coerce z 'double-float)))
 	   (exit (status) 
 	     `(return-from dual-simplex (prog1 ,status (print-z)))))
 	(check-infeas-vector b (simplex-lp sd))
 	;; phase 1
+	(format t "~&      Iterations       Phase 1 objective")
 	(print-z)
 	(loop
 	   (cond 
@@ -257,8 +259,11 @@
 		   (t
 		    (exit status)))))
 	;; phase 2
+	(print-z)
 	(check-dual-feasability sd)
-	(format t "Dual-feasible basis found, going to phase 2.~%")
+	(format t "~&Dual-feasible basis found, going to phase 2.")
+	(format t "~&      Iterations       Phase 2 objective (~A)" 
+		(lp-obj-name (simplex-lp sd)))
 	(let ((phase2-start-time (get-internal-real-time)))
 	  (simplex-prepare-phase2 sd)
 	  (print-z)	

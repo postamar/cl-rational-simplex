@@ -55,7 +55,7 @@ Returns LP object instance."
 	 `(progn (format t (concatenate 'string 
 					"In LP ~A,"
 					err-string
-					,format-str "~%")
+					,format-str ".~%")
 			 (lp-name lp) ,@format-args)
 		 (return-from parse-coef-seq (values nil nil)))))
     (let ((coef-alist))
@@ -118,7 +118,7 @@ Returns T on success, NIL on failure."
       ((errquit (format-str &rest format-args)
 	 `(progn (format t (concatenate 'string 
 					"In LP ~A, failed to add variable: " 
-					,format-str "~%")
+					,format-str ".~%")
 			 (lp-name lp) ,@format-args)
 		 (return-from lp-add-variable nil))))
     (let* ((ref (adjvector-column-fill-pointer (lp-columns lp))) ; column is appended
@@ -208,7 +208,7 @@ Returns T on success, NIL on failure."
       ((errquit (format-str &rest format-args)
 	 `(progn (format t (concatenate 'string 
 					"In lp ~A, failed to add constraint: " 
-					,format-str "~%")
+					,format-str ".~%")
 			 (lp-name lp) ,@format-args)
 		 (return-from lp-add-constraint nil))))
     (let* ((ref (adjvector-row-fill-pointer (lp-rows lp))) ; row is appended
@@ -304,13 +304,16 @@ Returns LP object instance on success, NIL on failure."
     (if mps
 	(mps->lp mps)
 	(progn
-	  (format t "Failed loading MPS data from file ~A~%" full-mps-file-path)
+	  (format t "Failed loading MPS data from file ~A.~%" full-mps-file-path)
 	  ;; return NIL on failure
 	  nil))))
 
 
+
+
 ;;;;
-(defun lp-solve (lp &key (z-print-freq 1) 
+(defun lp-solve (lp &key 
+		 (z-print-freq 1) 
 		 (min-z) 
 		 (max-z)
 		 (max-total-time)
@@ -344,31 +347,29 @@ Returns LP object instance on success, NIL on failure."
     (errmsg max-phase-iters)
     ;; reset random state
     (setf *random-state* (make-random-state *simplex-random-state*))
-    ;; create initial basis
-    (let ((basis (make-phase1-initial-basis lp)))
+    ;; create basis and simplex data structure instances
+    (let ((sd nil)
+	  (basis (make-phase1-initial-basis lp)))
+      ;; check basis was created succesfully
       (unless basis
-	(format t "Solve error: could not create initial basis for LP ~A~%." (lp-name lp))
+	(format t "Solve error: could not create initial basis for LP ~A.~%" (lp-name lp))
 	(return-from lp-solve nil))
-      ;; create simplex data structure
-      (let ((sd (make-simplex lp basis)))
-	(unless sd
-	  (format t "Solve error: could not initialize the dual-simplex method for LP ~A~%." 
-		  (lp-name lp))
-	  (return-from lp-solve nil))
-	;; solve the lp
-	(values (dual-simplex sd
-			      :min-z min-z
-			      :max-z max-z
-			      :z-print-freq z-print-freq
-			      :max-total-time max-total-time
-			      :max-phase-time max-phase-time
-			      :max-total-iters max-total-iters
-			      :max-phase-iters max-phase-iters)
-		(if (basis-in-phase1 basis) 'PHASE1 'PHASE2)
-		(basis-obj-value basis)
-		(basis-header basis)
-		(basis-primal-values basis)
-		(basis-column-flags basis))))))
+      ;; check simplex-data was created succesfully
+      (unless (setf sd (make-simplex lp basis))
+	(format t "Solve error: could not initialize the dual-simplex method for LP ~A.~%" 
+		(lp-name lp))
+	(return-from lp-solve nil))
+      ;; solve the lp
+      (values (dual-simplex sd
+			    :min-z min-z
+			    :max-z max-z
+			    :z-print-freq z-print-freq
+			    :max-total-time max-total-time
+			    :max-phase-time max-phase-time
+			    :max-total-iters max-total-iters
+			    :max-phase-iters max-phase-iters)
+	      basis
+	      (simplex-stats sd)))))
 
 
 
