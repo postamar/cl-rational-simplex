@@ -7,8 +7,8 @@
 ;;;;; * add new row with lp-add-constraint
 ;;;;; * solve with lp-solve
 ;;;;; * profile the solver with rational-simplex-profiling
-;;;;;
-;;;;;
+;;;;; * get solution values with lp-primal-solution,
+;;;;;   lp-dual-solution, lp-slack-values, lp-reduced-costs.
 
 
 ;;;; 
@@ -361,16 +361,193 @@ Returns LP object instance on success, NIL on failure."
 		(lp-name lp))
 	(return-from lp-solve nil))
       ;; solve the lp
-      (values (dual-simplex sd
-			    :min-z min-z
-			    :max-z max-z
-			    :z-print-freq z-print-freq
-			    :max-total-time max-total-time
-			    :max-phase-time max-phase-time
-			    :max-total-iters max-total-iters
-			    :max-phase-iters max-phase-iters)
-	      basis
-	      (simplex-stats sd)))))
+      (let ((status (dual-simplex sd
+				  :min-z min-z
+				  :max-z max-z
+				  :z-print-freq z-print-freq
+				  :max-total-time max-total-time
+				  :max-phase-time max-phase-time
+				  :max-total-iters max-total-iters
+				  :max-phase-iters max-phase-iters)))
+	(format t "~%")
+	(values status (simplex-basis sd) (simplex-stats sd))))))
+
+
+
+;;;;
+(defun lp-primal-solution (lp basis &optional (by-name nil))
+  "Computes the primal solution values for a given basis.
+Returns an associative list of (column-ref . val) pairs, 
+or (name . val) pairs if by-name is not NIL."
+  (declare (lp lp)
+	   (basis basis))
+  (macrolet
+      ((exit (format-str &rest format-args)
+	 `(progn
+	    (format t (concatenate 'string 
+				   "Error computing primal solution: basis is not dual-feasible, " 
+				   ,format-str ".~%") 
+		    ,@format-args)
+	    (return-from lp-primal-solution nil))))
+    (when (basis-in-phase1 basis)
+      (exit "(phase 1 basis)"))
+    (let* ((n (length (basis-column-flags basis)))
+	   (m (length (basis-header basis)))
+	   (x nil))
+      (flet ((add-to-list (col val)
+	       (unless (column-is-slack col)
+		 (push (cons (if by-name (column-name col) (column-ref col)) val) x))))
+	;; get basic variable values
+	(dotimes (i m)
+	  (let ((j (aref (basis-header basis) i)))
+	    (unless (eq (aref (basis-column-flags basis) j) 'basic)
+	      (exit "variable #~D is in header yet not set to 'BASIC" j))
+	    (add-to-list (adjvector-column-ref (lp-columns lp) j) 
+			 (aref (basis-primal-values basis) i))))
+	;; get non-basic variable values
+	(dotimes (j n x)		; return assoc list when done
+	  (let ((flag (aref (basis-column-flags basis) j))
+		(col (adjvector-column-ref (lp-columns lp) j)))
+	    (cond ((eq 'basic flag)) 
+		  ((eq 'nonbasic-upper-bound flag)
+		   (if (column-has-u col)
+		       (add-to-list col (column-u col))
+		       (exit "variable #~D has no upper bound, yet is set to 'NONBASIC-UPPER-BOUND" j)))
+		  ((eq 'nonbasic-lower-bound flag)
+		   (if (column-has-l col)
+		       (add-to-list col (column-l col))
+		       (exit "variable #~D has no lower bound, yet is set to 'NONBASIC-LOWER-BOUND" j)))
+		  (t
+		   (exit "variable #~D is set to ~A" j flag)))))))))
+
+
+
+;;;;
+(defun lp-slack-values (lp basis &optional (by-name nil))
+  "Computes the primal slack values in each constraint for a given basis.
+Returns an associative list of (row-ref . val) pairs, 
+or (name . val) pairs if by-name is not NIL."
+  (declare (lp lp)
+	   (basis basis))
+  (macrolet
+      ((exit (format-str &rest format-args)
+	 `(progn
+	    (format t (concatenate 'string 
+				   "Error computing slack values: basis is not dual-feasible, " 
+				   ,format-str ".~%") 
+		    ,@format-args)
+	    (return-from lp-slack-values nil))))
+    (when (basis-in-phase1 basis)
+      (exit "(phase 1 basis)"))
+    (let ((slack nil)
+	  (nrows (adjvector-row-fill-pointer (lp-rows lp))))
+      (flet ((add-to-list (row val)
+	       (push (cons (if by-name (row-name row) (row-ref row)) (- val)) slack)))
+	;; go through each row and get slack values
+	(dotimes (row-ref nrows slack)	; return assoc list when done
+	  (let* ((row (adjvector-row-ref (lp-rows lp) row-ref))
+		 (slack-col-ref (row-slack-col-ref row))
+		 (slack-col (adjvector-column-ref (lp-columns lp) slack-col-ref))
+		 (flag (aref (basis-column-flags basis) slack-col-ref)))
+	    (cond ((eq 'basic flag)
+		   (let ((val 0) (val-found nil))
+		     (dotimes (i (length (basis-header basis)))
+		       (when (= (aref (basis-header basis) i) slack-col-ref)
+			 (setf val (aref (basis-primal-values basis) i)
+			       val-found t)))
+		     (unless val-found
+		       (exit "slack variable of row #~D is 'BASIC, yet cannot be found in basis header" row-ref))
+		     (add-to-list row val)))
+		  ((eq 'nonbasic-upper-bound flag)
+		   (if (column-has-u slack-col)
+		       (add-to-list row (column-u slack-col))
+		       (exit "slack variable of row #~D has no upper bound, yet is set to 'NONBASIC-UPPER-BOUND" row-ref)))
+		  ((eq 'nonbasic-lower-bound flag)
+		   (if (column-has-l slack-col)
+		       (add-to-list row (column-l slack-col))
+		       (exit "slack variable of row #~D has no lower bound, yet is set to 'NONBASIC-LOWER-BOUND" row-ref)))
+		  (t
+		   (exit "slack variable of row #~D is set to ~A" row-ref flag)))))))))
+      
+
+
+;;;;
+(defun lp-dual-solution (lp basis &optional (by-name nil))
+  "Computes the full dual solution vector for a given basis
+Returns an associative list of (row-ref . val) pairs, 
+or (name . val) pairs if by-name is not NIL."
+  (declare (lp lp)
+	   (basis basis))
+  (macrolet
+      ((exit (format-str &rest format-args)
+	 `(progn
+	    (format t (concatenate 'string 
+				   "Error computing dual solution: basis is not dual-feasible, " 
+				   ,format-str ".~%") 
+		    ,@format-args)
+	    (return-from lp-dual-solution nil))))
+    (when (basis-in-phase1 basis)
+      (exit "(phase 1 basis)"))
+    (let* ((rhs (make-hsv))
+	   (tr (make-tran (basis-matrix basis)))
+	   (bh (basis-header basis))
+	   (m (length bh))
+	   (cdenom 1)
+	   (vals (make-array (adjvector-row-fill-pointer (lp-rows lp)) :element-type 'rational)))
+      ;; get common denominator
+      (dotimes (i m)
+	(let* ((col (adjvector-column-ref (lp-columns lp) (aref bh i)))
+	       (c (column-c col))
+	       (cd (denominator c)))
+	  (unless (zerop c)
+	    (mulf cdenom (/ cd (gcd cd cdenom))))))
+      ;; create right-hand-side for BTRAN
+      (setf (hsv-coef rhs) (/ 1 cdenom))
+      (dotimes (i m)
+	(let* ((col (adjvector-column-ref (lp-columns lp) (aref bh i)))
+	       (c (column-c col)))
+	  (unless (zerop c)
+	    (hsv-add i (* (numerator c) (/ cdenom (denominator c))) rhs))))
+      ;; compute and store multipliers
+      (btran tr rhs)
+      (check-btran basis lp tr rhs)
+      (dotimes (k (hsv-length (tran-hsv tr)))
+	(setf (aref vals (adjvector-fixnum-ref (lp-active-row-refs lp) 
+					       (aref (hsv-is (tran-hsv tr)) k))) 
+	      (* (hsv-coef (tran-hsv tr)) (aref (hsv-vis (tran-hsv tr)) k))))
+      ;; return associative list
+      (let ((y nil))
+	(dotimes (row-ref (length vals) y)
+	  (let ((row (adjvector-row-ref (lp-rows lp) row-ref)))
+	    (push (cons (if by-name (row-name row) row-ref) (aref vals row-ref)) y)))))))
+  
+  
+
+;;;;
+(defun lp-reduced-costs (lp basis &optional (by-name nil))
+  "Computes the reduced costs for a given basis.
+Returns an associative list of (column-ref . val) pairs, 
+or (name . val) pairs if by-name is not NIL."
+  (declare (lp lp)
+	   (basis basis))
+  (macrolet
+      ((exit (format-str &rest format-args)
+	 `(progn
+	    (format t (concatenate 'string "Error computing reduced costs: basis is not dual-feasible, " 
+				   ,format-str ".~%") 
+		    ,@format-args)
+	    (return-from lp-reduced-costs nil))))
+    (when (basis-in-phase1 basis)
+      (exit "(phase 1 basis)"))
+    (let* ((n (length (basis-column-flags basis)))
+	   (x nil))
+      (flet ((add-to-list (col val)
+	       (unless (column-is-slack col)
+		 (push (cons (if by-name (column-name col) (column-ref col)) val) x))))
+	(dotimes (j n x) ; return assoc list when done
+	  (add-to-list (adjvector-column-ref (lp-columns lp) j) 
+		       (aref (basis-reduced-costs basis) j)))))))
+
 
 
 

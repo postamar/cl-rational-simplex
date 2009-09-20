@@ -6,10 +6,17 @@ Quick solver instructions:
 - or load from MPS file with lp-load-from-mps
 
 2. Modify
-- add new variable with lp-add-variable
 - add new constraint with lp-add-constraint
+- add new variable with lp-add-variable
+(adding all constraints before adding all variables is most efficient)
 
 3. Solve
-- run lp-solve
+- if desired, run rational-simplex-profiling to enable profiling of important functions
+- run lp-solve to find an optimal basis
 
-Function arguments and return values are more extensively described in doc strings.
+4. Analyze
+- get primal solution values with lp-primal-solution and lp-slack-values
+- get dual solution values wih lp-dual-solution and lp-reduced-costs
+
+
+Function arguments and return values are documented more extensively in their doc strings.
