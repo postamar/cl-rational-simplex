@@ -6,7 +6,8 @@
 ;;;;; * add new column with lp-add-variable
 ;;;;; * add new row with lp-add-constraint
 ;;;;; * solve with lp-solve
-;;;;; * profile the solver with rational-simplex-profiling
+;;;;; * profile the solver with single-threaded-profiling
+;;;;;   (single-threaded mode only)
 ;;;;; * get solution values with lp-primal-solution,
 ;;;;;   lp-dual-solution, lp-slack-values, lp-reduced-costs.
 
@@ -552,20 +553,18 @@ or (name . val) pairs if by-name is not NIL."
 
 
 ;;;; Switches profiling ON for important functions of the solver
-(defun rational-simplex-profiling ()
-  (profile hsv-normalize)
-  (profile btran-solve-eta)
-  (profile btran-multiply-eta)
-  (profile ftran-solve-eta)
-  (profile ftran-multiply-eta)
-  (profile simplex-iteration)
-  (profile btran)
-  (profile ftran)
+(defun single-threaded-profiling ()
+  (profile simplex-iteration-dse-ftran)
+  (profile simplex-iteration-ftran)
+  (profile simplex-iteration-btran)
   (profile choose-exiting-basis-index)
   (profile choose-entering-basis-index)
   (profile compute-pivot-row)
   (profile simplex-basis-update)
+  (profile simplex-compute-flip-ftran)
+  (profile simplex-basis-update-dse)
   (profile simplex-basis-update-primal)
   (profile simplex-basis-matrix-update)
-  (profile lu-update)
-  (profile basis-matrix-lu-factorization))
+  (profile simplex-basis-matrix-update-compute-spike)
+  (profile simplex-basis-matrix-refactorize)
+  (profile simplex-finalize-iteration))

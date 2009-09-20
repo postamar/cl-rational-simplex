@@ -11,7 +11,8 @@ Quick solver instructions:
 (adding all constraints before adding all variables is most efficient)
 
 3. Solve
-- if desired, run rational-simplex-profiling to enable profiling of important functions
+- if desired and in single-threaded mode (i.e. +thread-system+ is NIL),
+	run single-threaded-profiling to enable profiling of important functions
 - run lp-solve to find an optimal basis
 
 4. Analyze

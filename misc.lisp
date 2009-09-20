@@ -3,9 +3,9 @@
 ;;;; Common functions and macros that don't belong anywhere else
 ;;;;
 
-
-;;;; if set to T, activates SLOW result-verifying checks
-(defparameter *checks* nil)
+;;;; 
+(defparameter *checks* nil
+  "if set to T, activates SLOW result-verifying checks")
 
 
 

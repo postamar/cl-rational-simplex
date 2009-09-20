@@ -8,6 +8,9 @@
 
 ;;;; Statistics data structure
 (defstruct stats
+  (total-duration 0.0 :type float)
+  (phase1-duration 0.0 :type float)
+  (phase2-duration 0.0 :type float)
   (total-iters 0 :type fixnum)
   (phase1-iters 0 :type fixnum)
   (phase2-iters 0 :type fixnum))
@@ -23,11 +26,14 @@
     (lp                  err :type lp)
     (stats               err :type stats)
     (basis               err :type basis)
+    (alt-basis-matrix    err :type basis-matrix)
     (btran               err :type tran)
     (ftran               err :type tran)
     (flip-ftran          err :type tran)
     (dse-ftran           err :type tran)
+    (spike-ftran         err :type tran)
     (hsv                 err :type hsv)
+    (spike-hsv           err :type hsv)
     (pivot-row-col-refs  err :type (simple-array fixnum 1))
     (pivot-row-values    err :type (simple-array rational 1))
     (pivot-row-length    0   :type fixnum)
@@ -69,16 +75,20 @@
 
 ;;;; Constructor
 (defun make-simplex (lp basis)
-  (let ((n (adjvector-column-fill-pointer (lp-columns lp))))
+  (let ((n (adjvector-column-fill-pointer (lp-columns lp)))
+	(refac-period (basis-matrix-refactorization-period (basis-matrix basis))))
     (%make-simplex
      :lp                 lp
      :stats              (make-stats)
      :basis              basis
+     :alt-basis-matrix   (make-basis-matrix :lp lp :refactorization-period refac-period)
      :btran              (make-tran (basis-matrix basis))
      :ftran              (make-tran (basis-matrix basis))
      :flip-ftran         (make-tran (basis-matrix basis))
      :dse-ftran          (make-tran (basis-matrix basis))
+     :spike-ftran        (make-tran (basis-matrix basis))
      :hsv                (make-hsv)
+     :spike-hsv          (make-hsv)
      :pivot-row-col-refs (make-array n :initial-element -1 :element-type 'fixnum)
      :pivot-row-values   (make-array n :initial-element 0 :element-type 'rational)
      :breakpoints        (make-array n :initial-element 0 :element-type 'bit)
@@ -118,6 +128,18 @@
 	  (hsv-add ind (aref (hsv-vis (column-hsv col)) k) (simplex-hsv sd)))))))
 
 
+;;;; Sets a column of the LP (usually the entering column)
+;;;; in the simplex object's intermediate result vector for spikes
+(defun set-column-as-simplex-spike-vector (sd q)
+  (let* ((lp (simplex-lp sd))
+	 (col (adjvector-column-ref (lp-columns lp) q)))
+    (reset-hsv (simplex-spike-hsv sd))
+    (setf (hsv-coef (simplex-spike-hsv sd)) (hsv-coef (column-hsv col)))
+    (dotimes (k (hsv-length (column-hsv col)))
+      (let ((ind (adjvector-fixnum-ref (lp-active-row-inds lp)
+				       (aref (hsv-is (column-hsv col)) k))))
+	(unless (= -1 ind)
+	  (hsv-add ind (aref (hsv-vis (column-hsv col)) k) (simplex-spike-hsv sd)))))))
 
 
 ;;;;; DEBUGGING

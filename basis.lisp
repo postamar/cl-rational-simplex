@@ -142,7 +142,7 @@
     ;; return basis instance
     (let* ((refac-period (min 200 (+ 10 (floor m 20))))
 	   (matrix (make-basis-matrix :lp lp :refactorization-period refac-period)))
-      (fill-basis-matrix matrix lp header)
+      (fill-basis-matrix matrix lp header -1 -1)
       (basis-matrix-lu-factorization matrix)
       (%make-basis
        :matrix matrix

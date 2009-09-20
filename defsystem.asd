@@ -13,11 +13,12 @@
   :description "An exact dual-simplex algorithm implementation using rational numbers"
   :serial t
   :components ((:file "misc")
+	       (:file "threading")
 	       (:file "datastruct")
 	       (:file "mps")
 	       (:file "hsv")
 	       (:file "lp"
-		      :depends-on ("misc" "datastruct" "mps" "hsv"))
+		      :depends-on ("misc" "datastruct" "mps" "hsv" "threading"))
 	       (:file "preproc"
 		      :depends-on ("lp"))
 	       (:file "bmatrix"

@@ -5,6 +5,89 @@
 
 
 
+;;;; Returns T if basis needs to be refactorized from scratch
+(defun simplex-basis-matrix-refactorize-p (sd)
+  (zerop (mod (stats-total-iters (simplex-stats sd))
+	      (basis-matrix-refactorization-period (basis-matrix (simplex-basis sd))))))
+  
+
+
+;;;; Refactorizes basis from scratch
+(defun simplex-basis-matrix-refactorize (sd)
+  (let* ((b (simplex-basis sd))
+	 (bm (simplex-alt-basis-matrix sd))
+	 (bh (basis-header b))
+	 (leaving-ref (aref bh (simplex-pivot-row-index sd)))
+	 (entering-ref (simplex-pivot-col-ref sd)))
+    (fill-basis-matrix bm (simplex-lp sd) (basis-header b) leaving-ref entering-ref)
+    (unless (basis-matrix-lu-factorization bm)
+      (error "basis redundancy"))
+    (when *checks*
+      (let ((new-bh (copy-seq bh)))
+	(setf (aref new-bh (simplex-pivot-row-index sd)) entering-ref)
+	(check-u-seqs bm)
+	(check-lu (simplex-lp sd) bm new-bh)))))
+
+
+;;;; Computes spike for basis factorization update
+(defun simplex-basis-matrix-update-compute-spike (sd)
+  (let ((spike (tran-hsv (simplex-spike-ftran sd))))
+    (set-column-as-simplex-spike-vector sd (simplex-pivot-col-ref sd))
+    (ftran-l (simplex-spike-ftran sd) (simplex-spike-hsv sd))
+    (hsv-remove-zeros spike)
+    (hsv-normalize spike)))
+
+
+;;;; Updates basis factorization
+(defun simplex-basis-matrix-update (sd)
+  (let* ((b (simplex-basis sd))
+	 (bm (basis-matrix b))
+	 (bh (basis-header b))
+	 (spike (tran-hsv (simplex-spike-ftran sd))))
+    (lu-update bm (simplex-pivot-row-index sd) spike)
+    (when *checks*
+      (let ((new-bh (copy-seq bh)))
+	(setf (aref new-bh (simplex-pivot-row-index sd)) (simplex-pivot-col-ref sd))
+	(check-u-seqs bm)
+	(check-lu (simplex-lp sd) bm new-bh)))))
+
+
+;;;; Final basis matrix update operation and thread waiting,
+;;;; Ready for next iteration after this.
+(defun simplex-finalize-iteration (sd)
+  (thread-result *basis-matrix-factor-thread*)
+  (if (simplex-basis-matrix-refactorize-p sd)
+      (let ((bm (simplex-alt-basis-matrix sd)))
+	(rotatef (simplex-alt-basis-matrix sd) (basis-matrix (simplex-basis sd)))
+	(setf (tran-bm (simplex-ftran sd)) bm
+	      (tran-bm (simplex-flip-ftran sd)) bm
+	      (tran-bm (simplex-dse-ftran sd)) bm
+	      (tran-bm (simplex-spike-ftran sd)) bm
+	      (tran-bm (simplex-btran sd)) bm))
+      (simplex-basis-matrix-update sd))
+  (thread-result *dse-weight-update-thread*))
+
+
+;;;; 
+(defun simplex-iteration-dse-ftran (sd)
+  (ftran (simplex-dse-ftran sd) (tran-hsv (simplex-btran sd)))
+  (check-ftran (simplex-basis sd) (simplex-lp sd) 
+	       (simplex-dse-ftran sd) (tran-hsv (simplex-btran sd))))
+
+
+;;;;
+(defun simplex-iteration-btran (sd)
+  (btran (simplex-btran sd) (simplex-hsv sd))
+  (check-btran (simplex-basis sd) (simplex-lp sd) 
+	       (simplex-btran sd) (simplex-hsv sd)))
+
+
+;;;;
+(defun simplex-iteration-ftran (sd)
+  (ftran (simplex-ftran sd) (simplex-hsv sd))
+  (check-ftran (simplex-basis sd) (simplex-lp sd) 
+	       (simplex-ftran sd) (simplex-hsv sd)))
+
 
 ;;;;; Performs an iteration of the dual simplex algorithm
 (defun simplex-iteration (sd)
@@ -16,23 +99,36 @@
     (return-from simplex-iteration 'optimal))
   ;; btran
   (hsv-add (simplex-pivot-row-index sd) 1 (simplex-hsv sd))
-  (btran (simplex-btran sd) (simplex-hsv sd))
-  (check-btran (simplex-basis sd) (simplex-lp sd) (simplex-btran sd) (simplex-hsv sd))
+  (simplex-iteration-btran sd)
+  ;; dse ftran
+  (thread-launch *dse-ftran-thread* 
+		 #'(lambda () (simplex-iteration-dse-ftran sd)))
   ;; pivot row
   (compute-pivot-row sd)
   (check-pivot-row sd)
   ;; ratio test
   (when (= -1 (choose-entering-basis-index sd))
     (return-from simplex-iteration 'infeasible))
+  ;;
+  (when (simplex-basis-matrix-refactorize-p sd)
+    ;; launch basis matrix refactorization 
+    (thread-launch *basis-matrix-factor-thread* 
+		   #'(lambda () (simplex-basis-matrix-refactorize sd))))
   ;; ftrans
-  (ftran (simplex-dse-ftran sd) (tran-hsv (simplex-btran sd)))
-  (check-ftran (simplex-basis sd) (simplex-lp sd) 
-	       (simplex-dse-ftran sd) (tran-hsv (simplex-btran sd)))
   (set-column-as-simplex-vector sd (simplex-pivot-col-ref sd))
-  (ftran (simplex-ftran sd) (simplex-hsv sd))
-  (check-ftran (simplex-basis sd) (simplex-lp sd) (simplex-ftran sd) (simplex-hsv sd))
+  (simplex-iteration-ftran sd)
+  ;;
+  (unless (simplex-basis-matrix-refactorize-p sd)
+    ;; launch basis matrix factorization update
+    (thread-launch *basis-matrix-factor-thread* 
+		   #'(lambda () (simplex-basis-matrix-update-compute-spike sd))))
+  ;; update DSE weights
+  (thread-launch *dse-weight-update-thread* 
+		 #'(lambda () (simplex-basis-update-dse sd)))
   ;; basis change and update
   (simplex-basis-update sd)
+  ;;
+  (simplex-finalize-iteration sd)
   (check-infeas-vector (simplex-basis sd) (simplex-lp sd))
   (check-reduced-costs sd)
   (check-dual-feasability sd)
@@ -214,7 +310,8 @@
 		     (max-phase-time)
 		     (max-total-iters) 
 		     (max-phase-iters))
-  (let ((start-time (get-internal-real-time)))
+  (let ((start-time (get-internal-real-time))
+	(phase2-start-time 0))
     (symbol-macrolet 
 	((b (simplex-basis sd))
 	 (st (simplex-stats sd))
@@ -225,7 +322,16 @@
 		      (stats-total-iters st)
 		      (coerce z 'double-float)))
 	   (exit (status) 
-	     `(return-from dual-simplex (prog1 ,status (print-z)))))
+	     `(progn 
+		(setf (stats-total-duration st) 
+		      (/ (float (- (get-internal-real-time) start-time))
+			 (float internal-time-units-per-second)))
+		(if (basis-in-phase1 b) 
+		    (setf (stats-phase1-duration st) (stats-total-duration st))
+		    (setf (stats-phase2-duration st) 
+			  (/ (float (- (get-internal-real-time) phase2-start-time))
+			     (float internal-time-units-per-second))))
+		(return-from dual-simplex (prog1 ,status (print-z))))))
 	(check-infeas-vector b (simplex-lp sd))
 	;; phase 1
 	(format t "~&      Iterations       Phase 1 objective")
@@ -259,44 +365,47 @@
 		   (t
 		    (exit status)))))
 	;; phase 2
+	(setf (stats-phase1-duration st) 
+	      (/ (float (- (get-internal-real-time) start-time))
+		 (float internal-time-units-per-second)))
 	(print-z)
 	(check-dual-feasability sd)
 	(format t "~&Dual-feasible basis found, going to phase 2.")
 	(format t "~&      Iterations       Phase 2 objective (~A)" 
 		(lp-obj-name (simplex-lp sd)))
-	(let ((phase2-start-time (get-internal-real-time)))
-	  (simplex-prepare-phase2 sd)
-	  (print-z)	
-	  (check-infeas-vector b (simplex-lp sd))
-	  (check-dual-feasability sd)
-	  (check-primal-values sd)
-	  (loop 
-	     (cond 
-	       ((and min-z (<= z min-z))
-		(exit 'reached-min-z))
-	       ((and max-z (<= max-z z))
-		(exit 'reached-max-z))
-	       ((and max-phase-iters (<= max-phase-iters (stats-phase2-iters st)))
-		(exit 'phase2-iteration-count-cutoff))
-	       ((and max-total-iters (<= max-total-iters (stats-total-iters st)))
-		(exit 'total-iteration-count-cutoff))
-	       ((and max-phase-time 
-		     (< (* max-phase-time internal-time-units-per-second)
-			(- (get-internal-real-time) phase2-start-time)))
-		(exit 'phase2-duration-cutoff))
-	       ((and max-total-time 
-		     (< (* max-total-time internal-time-units-per-second)
-			(- (get-internal-real-time) start-time)))
-		(exit 'total-duration-cutoff)))
-	     (incf (stats-phase2-iters (simplex-stats sd)))
-	     (incf (stats-total-iters (simplex-stats sd)))
-	     (when (zerop (mod (stats-total-iters st) z-print-freq))
-	       (print-z))
-	     (let ((status (simplex-iteration sd)))
-	       (check-primal-update-phase2 sd)
-	       (check-primal-values sd)
-	       (unless (eq status 'dual-feasible)
-		 (exit status)))))))))
+	(setf phase2-start-time (get-internal-real-time))
+	(simplex-prepare-phase2 sd)
+	(print-z)	
+	(check-infeas-vector b (simplex-lp sd))
+	(check-dual-feasability sd)
+	(check-primal-values sd)
+	(loop 
+	   (cond 
+	     ((and min-z (<= z min-z))
+	      (exit 'reached-min-z))
+	     ((and max-z (<= max-z z))
+	      (exit 'reached-max-z))
+	     ((and max-phase-iters (<= max-phase-iters (stats-phase2-iters st)))
+	      (exit 'phase2-iteration-count-cutoff))
+	     ((and max-total-iters (<= max-total-iters (stats-total-iters st)))
+	      (exit 'total-iteration-count-cutoff))
+	     ((and max-phase-time 
+		   (< (* max-phase-time internal-time-units-per-second)
+		      (- (get-internal-real-time) phase2-start-time)))
+	      (exit 'phase2-duration-cutoff))
+	     ((and max-total-time 
+		   (< (* max-total-time internal-time-units-per-second)
+		      (- (get-internal-real-time) start-time)))
+	      (exit 'total-duration-cutoff)))
+	   (incf (stats-phase2-iters (simplex-stats sd)))
+	   (incf (stats-total-iters (simplex-stats sd)))
+	   (when (zerop (mod (stats-total-iters st) z-print-freq))
+	     (print-z))
+	   (let ((status (simplex-iteration sd)))
+	     (check-primal-update-phase2 sd)
+	     (check-primal-values sd)
+	     (unless (eq status 'dual-feasible)
+	       (exit status))))))))
 		 
 
 

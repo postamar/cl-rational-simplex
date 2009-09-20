@@ -44,40 +44,25 @@
 
 
 
-;;;; Updates primal values, primal infeasabilities, and dual-steepest-edge weights
-(defun simplex-basis-update-primal (sd)
+
+
+;;;; Updates dual-steepest-edge weights
+(defun simplex-basis-update-dse (sd)
   (declare (optimize (speed 1) (safety 0) (debug 0)))
   (let* ((b (simplex-basis sd))
 	 (dse-tr (simplex-dse-ftran sd))
 	 (alphaq (tran-hsv (simplex-ftran sd)))
 	 (exit-row (simplex-pivot-row-index sd))
 	 (exit-row-weight (aref (basis-dse-weights b) exit-row))
-	 (primal-values (basis-primal-values b))
-	 (lpcols (lp-columns (simplex-lp sd)))
 	 (alpha-index (hsv-find exit-row alphaq)))
     (declare (fixnum alpha-index))
     (assert (/= -1 alpha-index))
     (assert (/= 0 (aref (hsv-vis alphaq) alpha-index)))
-    ;; compute primal step
-    (setf (simplex-primal-step sd)
-	  (/ (simplex-delta sd)
-	     (* (aref (hsv-vis alphaq) alpha-index)
-		(hsv-coef alphaq))))
+    ;; wait for DSE FTRAN computation to end
+    (thread-result *dse-ftran-thread*)
     ;; update values and weights
     (dotimes (k (hsv-length alphaq))
       (let ((i (aref (hsv-is alphaq) k)))
-	;; update basic primal values
-	(decf (aref primal-values i) 
-	      (* (simplex-primal-step sd)
-		 (hsv-coef alphaq)
-		 (aref (hsv-vis alphaq) k)))
-	;; update primal infeasabilities
-	(basis-update-primal-infeasability 
-	 (basis-primal-infeas b)
-	 i
-	 (aref primal-values i) 
-	 (adjvector-column-ref lpcols (aref (basis-header b) i))
-	 (basis-in-phase1 b))
 	;; update dse weights
 	(if (= k alpha-index)
 	    (let ((d (* (hsv-coef alphaq)
@@ -94,36 +79,58 @@
 			 (hsv-coef (tran-hsv dse-tr))
 			 (aref (hsv-vis (tran-hsv dse-tr)) tau-index))))
 	      (incf (aref (basis-dse-weights b) i)
-		    (* ratio ratio exit-row-weight))))))))
+		    (* ratio ratio exit-row-weight))))))
+    ;; begin SBCL 32bit gcd bug...
+    (dotimes (k (hsv-length alphaq))
+      (let* ((i (aref (hsv-is alphaq) k))
+	     (weight (aref (basis-dse-weights b) i)))
+	(when (and (> 0 (numerator weight))
+		   (> 0 (denominator weight)))
+	       (setf (aref (basis-dse-weights b) i)
+		     (/ (abs (numerator weight)) (abs (denominator weight)))))))
+    ;; end SBCL 32bit gcd bug
+    ))
 
 
 
-;;;; Updates the basis matrix
-;;;; Either rebuilding or just updating the LU factorization
-(defun simplex-basis-matrix-update (sd)
+
+;;;; Updates primal values, primal infeasabilities, and dual-steepest-edge weights
+(defun simplex-basis-update-primal (sd)
+  (declare (optimize (speed 1) (safety 0) (debug 0)))
   (let* ((b (simplex-basis sd))
-	 (lp (simplex-lp sd))
-	 (bm (basis-matrix b)))
-    (if (zerop (mod (stats-total-iters (simplex-stats sd))
-		    (basis-matrix-refactorization-period bm)))
-	(progn 
-	  (fill-basis-matrix bm lp (basis-header b))
-	  (unless (basis-matrix-lu-factorization bm)
-	    (error "basis redundancy")))
-	(let ((spike (tran-hsv (simplex-ftran sd))))
-	  (set-column-as-simplex-vector sd (simplex-pivot-col-ref sd))
-	  (ftran-l (simplex-ftran sd) (simplex-hsv sd))
-	  (hsv-remove-zeros spike)
-	  (hsv-normalize spike)
-	  (lu-update bm (simplex-pivot-row-index sd) spike)))
-    (check-u-seqs bm)
-    (check-lu lp bm (basis-header b))))
-
+	 (alphaq (tran-hsv (simplex-ftran sd)))
+	 (exit-row (simplex-pivot-row-index sd))
+	 (primal-values (basis-primal-values b))
+	 (lpcols (lp-columns (simplex-lp sd)))
+	 (alpha-index (hsv-find exit-row alphaq)))
+    (declare (fixnum alpha-index))
+    (assert (/= -1 alpha-index))
+    (assert (/= 0 (aref (hsv-vis alphaq) alpha-index)))
+    ;; compute primal step
+    (setf (simplex-primal-step sd)
+	  (/ (simplex-delta sd)
+	     (* (aref (hsv-vis alphaq) alpha-index)
+		(hsv-coef alphaq))))
+    ;; update values
+    (dotimes (k (hsv-length alphaq))
+      (let ((i (aref (hsv-is alphaq) k)))
+	;; update basic primal values
+	(decf (aref primal-values i) 
+	      (* (simplex-primal-step sd)
+		 (hsv-coef alphaq)
+		 (aref (hsv-vis alphaq) k)))
+	;; update primal infeasabilities
+	(basis-update-primal-infeasability 
+	 (basis-primal-infeas b)
+	 i
+	 (aref primal-values i) 
+	 (adjvector-column-ref lpcols (aref (basis-header b) i))
+	 (basis-in-phase1 b))))))
 
 
 
 ;;;; Temporarily uses pivot row arrays to compute weighted column sum
-(defun simplex-compute-flip-ftran-rhs (sd)
+(defun simplex-compute-flip-ftran (sd)
   (let* ((lp (simplex-lp sd))
 	 (inphase1 (basis-in-phase1 (simplex-basis sd)))
 	 (n-cols (simplex-n-flips sd))
@@ -205,7 +212,11 @@
 		   (* cdenom (aref rhs-values k)) (simplex-hsv sd)))
 	(hsv-sort-indices-increasing (simplex-hsv sd))
 	(hsv-normalize (simplex-hsv sd))
-	(check-flip-rhs sd)))))
+	(check-flip-rhs sd))
+      ;; perform ftran
+      (ftran (simplex-flip-ftran sd) (simplex-hsv sd))
+      (check-ftran (simplex-basis sd) lp (simplex-flip-ftran sd) (simplex-hsv sd)))))
+      
 
 
 
@@ -238,9 +249,7 @@
 		     (aref (simplex-pivot-row-values sd) k)))))))
     ;; in case of bound flips
     (unless (zerop (simplex-n-flips sd))
-      (simplex-compute-flip-ftran-rhs sd)
-      (ftran (simplex-flip-ftran sd) (simplex-hsv sd))
-      (check-ftran b lp (simplex-flip-ftran sd) (simplex-hsv sd))
+      (simplex-compute-flip-ftran sd)
       ;; update objective, primal basic values and primal infeasabilities
       (let ((delta-x (tran-hsv (simplex-flip-ftran sd))))
 	(dotimes (k (hsv-length delta-x))
@@ -283,7 +292,5 @@
     ;; update objective
     (incf (basis-obj-value b)
 	  (* (simplex-dual-step sd)
-	     (simplex-delta sd)))
-    ;; update basis matrix
-    (simplex-basis-matrix-update sd)))
+	     (simplex-delta sd)))))
 
