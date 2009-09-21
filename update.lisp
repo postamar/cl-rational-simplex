@@ -44,8 +44,6 @@
 
 
 
-
-
 ;;;; Updates dual-steepest-edge weights
 (defun simplex-basis-update-dse (sd)
   (declare (optimize (speed 1) (safety 0) (debug 0)))
@@ -53,43 +51,81 @@
 	 (dse-tr (simplex-dse-ftran sd))
 	 (alphaq (tran-hsv (simplex-ftran sd)))
 	 (exit-row (simplex-pivot-row-index sd))
-	 (exit-row-weight (aref (basis-dse-weights b) exit-row))
-	 (alpha-index (hsv-find exit-row alphaq)))
-    (declare (fixnum alpha-index))
-    (assert (/= -1 alpha-index))
-    (assert (/= 0 (aref (hsv-vis alphaq) alpha-index)))
-    ;; wait for DSE FTRAN computation to end
-    (thread-result *dse-ftran-thread*)
-    ;; update values and weights
-    (dotimes (k (hsv-length alphaq))
-      (let ((i (aref (hsv-is alphaq) k)))
-	;; update dse weights
-	(if (= k alpha-index)
-	    (let ((d (* (hsv-coef alphaq)
-			(aref (hsv-vis alphaq) alpha-index))))
-	      (assert (= exit-row-weight (aref (basis-dse-weights b) exit-row)))
-	      (divf (aref (basis-dse-weights b) exit-row) (* d d)))
-	    (let ((ratio (/ (aref (hsv-vis alphaq) k)
-			    (aref (hsv-vis alphaq) alpha-index)))
-		  (tau-index (hsv-find i (tran-hsv dse-tr))))
-	      (declare (fixnum tau-index))
-	      (unless (= -1 tau-index)
-		(decf (aref (basis-dse-weights b) i)
-		      (* 2 ratio 
-			 (hsv-coef (tran-hsv dse-tr))
-			 (aref (hsv-vis (tran-hsv dse-tr)) tau-index))))
-	      (incf (aref (basis-dse-weights b) i)
-		    (* ratio ratio exit-row-weight))))))
-    ;; begin SBCL 32bit gcd bug...
-    (dotimes (k (hsv-length alphaq))
-      (let* ((i (aref (hsv-is alphaq) k))
-	     (weight (aref (basis-dse-weights b) i)))
-	(when (and (> 0 (numerator weight))
-		   (> 0 (denominator weight)))
-	       (setf (aref (basis-dse-weights b) i)
-		     (/ (abs (numerator weight)) (abs (denominator weight)))))))
-    ;; end SBCL 32bit gcd bug
-    ))
+	 (alpha-index (hsv-find exit-row alphaq))
+	 (alphaqr (aref (hsv-vis alphaq) alpha-index))
+	 (m (length (basis-header b)))
+	 (tau (tran-hsv dse-tr)) 
+	 (flags (simplex-dse-update-flags sd)))
+    ;; reset flags
+    (bit-xor flags flags t)
+    ;; build new dse-coef and new dse-vis
+    (let* ((alphaq-n (numerator (hsv-coef alphaq)))
+	   (alphaq-d (denominator (hsv-coef alphaq)))
+	   (tau-n (numerator (hsv-coef tau)))
+	   (tau-d (denominator (hsv-coef tau)))
+	   (dse-n (numerator (basis-dse-coef b)))
+	   (dse-d (denominator (basis-dse-coef b)))
+	   (a (* tau-d dse-n))
+	   (d (* alphaqr alphaqr))
+	   (c (* alphaq-n alphaq-n))
+	   (f (aref (basis-dse-weight-vis b) exit-row))
+	   (g (* 2 alphaqr tau-n dse-d))
+	   (h (gcd d f))
+	   (a.h (* a h))
+	   (j (gcd a.h g))
+	   (c.j (* c j))
+	   (l (* alphaq-d alphaq-d a f))
+	   (gcd-c.j-l (gcd c.j l))
+	   (c/ (/ c.j gcd-c.j-l))
+	   (a/ (/ a.h j))
+	   (g/ (/ g j))
+	   (d/ (/ d h))
+	   (f/ (/ f h)))
+      (declare (integer alphaq-n alphaq-d tau-n tau-d dse-n dse-d))
+      (declare (integer c/ a/ g/ d/ f/))
+      ;; update coefficient
+      (setf (basis-dse-coef b) (/ gcd-c.j-l (* dse-d d c tau-d)))
+      ;; update dse weights for nonzero elements in alphaq vector
+      (dotimes (k (hsv-length alphaq))
+	(let ((i (aref (hsv-is alphaq) k))
+	      (alphaqi (aref (hsv-vis alphaq) k)))
+	  (unless (zerop alphaqi)
+	    (setf (sbit flags i) 1)
+	    (setf (aref (basis-dse-weight-vis b) i)
+		  (if (= i exit-row)
+		      (/ l gcd-c.j-l)
+		      (let ((taui-ref (hsv-find i tau)))
+			(declare (fixnum taui-ref))
+			(if (= -1 taui-ref)
+			    (* c/ a/ (+ (* d/ (aref (basis-dse-weight-vis b) i)) 
+					(* f/ alphaqi alphaqi)))
+			    (* c/ (- (* a/ (+ (* d/ (aref (basis-dse-weight-vis b) i)) 
+					      (* f/ alphaqi alphaqi)))
+				     (* g/ alphaqi (aref (hsv-vis tau) taui-ref)))))))))))
+      ;; update all other dse weights
+      (dotimes (i m)
+	(when (zerop (sbit flags i))
+	  (setf (aref (basis-dse-weight-vis b) i) 
+		(* c/ a/ d/ (aref (basis-dse-weight-vis b) i))))))
+    ;; normalize signs and values
+    (let ((coef-signum (signum (basis-dse-coef b)))
+	  (common-factor (aref (basis-dse-weight-vis b) 0)))
+      (declare (integer common-factor))
+      (dotimes (i m)
+	(when (= 1 (setf common-factor
+			 (gcd common-factor (aref (basis-dse-weight-vis b) i))))
+	  (return)))
+      (when (> 0 coef-signum)
+	(setf common-factor (- common-factor)))
+      (unless (= 1 common-factor)
+	(setf (basis-dse-coef b) (* (basis-dse-coef b) common-factor))
+	(dotimes (i m)
+	  (let ((r (/ (aref (basis-dse-weight-vis b) i) common-factor)))
+	    (declare (integer r))
+	    (setf (aref (basis-dse-weight-vis b) i) r)))))))
+
+
+
 
 
 

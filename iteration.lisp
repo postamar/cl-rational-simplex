@@ -54,8 +54,7 @@
 
 ;;;; Final basis matrix update operation and thread waiting,
 ;;;; Ready for next iteration after this.
-(defun simplex-finalize-iteration (sd)
-  (thread-result *basis-matrix-factor-thread*)
+(defun simplex-finalize-basis-matrix-update (sd)
   (if (simplex-basis-matrix-refactorize-p sd)
       (let ((bm (simplex-alt-basis-matrix sd)))
 	(rotatef (simplex-alt-basis-matrix sd) (basis-matrix (simplex-basis sd)))
@@ -64,8 +63,7 @@
 	      (tran-bm (simplex-dse-ftran sd)) bm
 	      (tran-bm (simplex-spike-ftran sd)) bm
 	      (tran-bm (simplex-btran sd)) bm))
-      (simplex-basis-matrix-update sd))
-  (thread-result *dse-weight-update-thread*))
+      (simplex-basis-matrix-update sd)))
 
 
 ;;;; 
@@ -123,12 +121,15 @@
     (thread-launch *basis-matrix-factor-thread* 
 		   #'(lambda () (simplex-basis-matrix-update-compute-spike sd))))
   ;; update DSE weights
+  (thread-result *dse-ftran-thread*)
   (thread-launch *dse-weight-update-thread* 
 		 #'(lambda () (simplex-basis-update-dse sd)))
   ;; basis change and update
   (simplex-basis-update sd)
-  ;;
-  (simplex-finalize-iteration sd)
+  ;; complete the iteration
+  (thread-result *basis-matrix-factor-thread*)
+  (simplex-finalize-basis-matrix-update sd)
+  (thread-result *dse-weight-update-thread*)
   (check-infeas-vector (simplex-basis sd) (simplex-lp sd))
   (check-reduced-costs sd)
   (check-dual-feasability sd)

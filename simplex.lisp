@@ -49,7 +49,8 @@
     (add-refs            err :type (simple-array fixnum 1))
     (flip-col-refs       err :type (simple-array fixnum 1))
     (flip-col-coefs      err :type (simple-array rational 1))
-    (n-flips             0   :type fixnum)))
+    (n-flips             0   :type fixnum)
+    (dse-update-flags    err :type simple-bit-vector)))
 
 
 
@@ -76,6 +77,7 @@
 ;;;; Constructor
 (defun make-simplex (lp basis)
   (let ((n (adjvector-column-fill-pointer (lp-columns lp)))
+	(m (length (basis-header basis)))
 	(refac-period (basis-matrix-refactorization-period (basis-matrix basis))))
     (%make-simplex
      :lp                 lp
@@ -96,7 +98,8 @@
      :add-counters       (make-array n :initial-element -1 :element-type 'fixnum)
      :add-refs           (make-array n :initial-element -1 :element-type 'fixnum)
      :flip-col-refs      (make-array n :initial-element -1 :element-type 'fixnum)
-     :flip-col-coefs     (make-array n :initial-element 0 :element-type 'rational))))
+     :flip-col-coefs     (make-array n :initial-element 0 :element-type 'rational)
+     :dse-update-flags   (make-array m :element-type 'bit))))
 
     
 
@@ -304,7 +307,8 @@
 (defun check-dse-weights (sd)
   (when *checks*
     (let ((tr (simplex-btran sd))
-	  (betas (basis-dse-weights (simplex-basis sd)))
+	  (beta-coef (basis-dse-coef (simplex-basis sd)))
+	  (beta-vis (basis-dse-weight-vis (simplex-basis sd)))
 	  (m (basis-matrix-size (basis-matrix (simplex-basis sd))))
 	  (rhs (simplex-hsv sd))
 	  (test nil))
@@ -313,7 +317,7 @@
 	(hsv-add i 1 rhs)
 	(btran tr rhs)
 	(let ((weight 0)
-	      (betai (aref betas i))
+	      (betai (* beta-coef (aref beta-vis i)))
 	    (rho (tran-hsv tr)))
 	  (dotimes (k (hsv-length rho))
 	    (let ((rhok (aref (hsv-vis rho) k)))
@@ -333,7 +337,7 @@
 	  (btran tr rhs)
 	  (check-btran (simplex-basis sd) (simplex-lp sd) tr rhs)
 	  (let ((weight 0)
-	      (betai (aref betas i))
+		(betai (* beta-coef (aref beta-vis i)))
 		(rho (tran-hsv tr)))
 	    (dotimes (k (hsv-length rho))
 	      (let ((rhok (aref (hsv-vis rho) k)))

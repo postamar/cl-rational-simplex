@@ -207,4 +207,9 @@
 (defun hsv-find (ind hsv)
   (find-index-bounded (hsv-is hsv) (hsv-length hsv) ind))
 
-
+(defun hsv-find-value (ind hsv)
+  (let ((k (find-index-bounded (hsv-is hsv) (hsv-length hsv) ind)))
+    (if (= -1 k)
+	0
+	(aref (hsv-vis hsv) k))))
+	 

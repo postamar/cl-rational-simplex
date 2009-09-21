@@ -21,7 +21,8 @@
   ;; contains column reference numbers of columns in basis
   (header         #() :type (simple-array fixnum 1))
   ;; dual-steepest-edge weights for good exiting variable selection
-  (dse-weights    #() :type (simple-array rational 1))
+  (dse-coef       1   :type rational)
+  (dse-weight-vis #() :type (simple-array integer 1))
   ;; nonbasic dual variable values
   (reduced-costs  #() :type (simple-array rational 1))
   ;; nonbasic primal variable values
@@ -101,7 +102,7 @@
 	 (header      (make-array m :initial-element -1 :element-type 'fixnum))
 	 (rcosts      (make-array n :initial-element 0 :element-type 'rational))
 	 (flags       (make-array n :initial-element 'unknown :element-type 'symbol))
-	 (weights     (make-array m :initial-element 1 :element-type 'rational))
+	 (weights     (make-array m :initial-element 1 :element-type 'integer))
 	 (values      (make-array m :initial-element 0 :element-type 'rational))
 	 (infeas      (make-splay-tree-fixnum-rational)))
     ;; set flags to best bound
@@ -148,7 +149,7 @@
        :matrix matrix
        :header header
        :obj-value (phase1-initial-objective-value lp flags)
-       :dse-weights weights
+       :dse-weight-vis weights
        :reduced-costs rcosts 
        :column-flags flags
        :primal-values values

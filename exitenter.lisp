@@ -16,7 +16,8 @@
 	 (best-val 0))
     (map-splay-tree-fixnum-rational
      #'(lambda (k delta-square)
-	 (let ((weight (aref (basis-dse-weights b) k)))
+	 (let ((weight (aref (basis-dse-weight-vis b) k)))
+	   (assert (< 0 (basis-dse-coef b)))
 	   (cond ((< weight 0)
 		  (error "negative dse weight"))
 		 ((< delta-square 0)
@@ -30,7 +31,7 @@
 			infty t))
 		 (infty)
 		 (t
-		  (let ((val (/ delta-square weight)))
+		  (let ((val (/ delta-square (* (basis-dse-coef b) weight))))
 		    (cond
 		      ((< best-val val)
 		       (setf best-val val
