@@ -6,7 +6,7 @@
 
 (defsystem rationalsimplex
   :name "rational simplex"
-  :version "0.9"
+  :version "1.0"
   :maintainer "Marius Posta"
   :author "Marius Posta"
   :licence "BSD sans advertising clause (see file COPYING for details)"

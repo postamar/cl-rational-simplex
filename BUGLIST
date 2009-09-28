@@ -3,19 +3,12 @@
 
 **** BUGS PROPER
 
-- maros.mps in the netlib library fails in preparation of phase2.
-
-- solver doesn't work with preprocessor turned on.
-
-
+none known
 
 **** OMISSIONS, CONCERNS, TO-DO
 
-- no optimization for speed in performance-critical TRAN functions,
-  in pivot row computation and basis primal, dual and weights values update.
-
-- preprocessor is extremely basic, and doesn't work anymore.
-
+- preprocessor features almost inexistant.
+- solver doesn't work with preprocessor turned on.
 
 
 **** MISSING FEATURES

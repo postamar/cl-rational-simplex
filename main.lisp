@@ -316,6 +316,7 @@ Returns LP object instance on success, NIL on failure."
 ;;;;
 (defun lp-solve (lp &key 
 		 (z-print-freq 1) 
+		 (basis-refactor-period 10)
 		 (min-z) 
 		 (max-z)
 		 (max-total-time)
@@ -351,7 +352,7 @@ Returns LP object instance on success, NIL on failure."
     (setf *random-state* (make-random-state *simplex-random-state*))
     ;; create basis and simplex data structure instances
     (let ((sd nil)
-	  (basis (make-phase1-initial-basis lp)))
+	  (basis (make-phase1-initial-basis lp basis-refactor-period)))
       ;; check basis was created succesfully
       (unless basis
 	(format t "Solve error: could not create initial basis for LP ~A.~%" (lp-name lp))

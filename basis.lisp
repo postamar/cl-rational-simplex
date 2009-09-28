@@ -96,7 +96,7 @@
 
 
 ;;;; Generates a dual feasible basis using the slack variables
-(defun make-phase1-initial-basis (lp)
+(defun make-phase1-initial-basis (lp basis-refactor-period)
   (let* ((m (adjvector-fixnum-fill-pointer (lp-active-row-refs lp)))
 	 (n (adjvector-column-fill-pointer (lp-columns lp)))
 	 (header      (make-array m :initial-element -1 :element-type 'fixnum))
@@ -141,8 +141,8 @@
 	      ((and (column-has-u slack-col) (< 0 v))
 	       (splay-tree-fixnum-rational-set infeas i (* v v))))))
     ;; return basis instance
-    (let* ((refac-period (min 200 (+ 10 (floor m 20))))
-	   (matrix (make-basis-matrix :lp lp :refactorization-period refac-period)))
+    (let ((matrix (make-basis-matrix :lp lp 
+				     :refactorization-period basis-refactor-period)))
       (fill-basis-matrix matrix lp header -1 -1)
       (basis-matrix-lu-factorization matrix)
       (%make-basis

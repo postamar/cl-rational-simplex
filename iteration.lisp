@@ -254,6 +254,21 @@
 	 (flags (basis-column-flags b))
 	 (z 0))
     (setf (basis-in-phase1 b) nil)
+    ;; flip bounds if necessary
+    (dotimes (j (length flags))
+      (let ((flag (aref flags j))
+	    (d (aref (basis-reduced-costs b) j))
+	    (col (adjvector-column-ref (lp-columns lp) j)))
+	(cond ((and (eq flag 'nonbasic-lower-bound)
+		    (not (column-has-l col)))
+	       (if (zerop d)
+		   (setf (aref flags j) 'nonbasic-upper-bound)
+		   (error "dual-feasible basis exists, but is not the current basis")))
+	      ((and (eq flag 'nonbasic-upper-bound)
+		    (not (column-has-u col)))
+	       (if (zerop d) 
+		   (setf (aref flags j) 'nonbasic-lower-bound)
+		   (error "dual-feasible basis exists, but is not the current basis"))))))
     ;; compute reduced costs
     (simplex-compute-reduced-costs sd)
     ;; set nonbasic variable flags and compute objective value
@@ -339,8 +354,6 @@
 	(print-z)
 	(loop
 	   (cond 
-	     ((= z 0)
-	      (return))
 	     ((and max-phase-iters (<= max-phase-iters (stats-phase1-iters st)))
 	      (exit 'phase1-iteration-count-cutoff))
 	     ((and max-total-iters (<= max-total-iters (stats-total-iters st)))
